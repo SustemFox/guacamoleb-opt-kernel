@@ -93,10 +93,8 @@ jobs:
           echo "GCC32_DIR=$GCC32_DIR" >> "$GITHUB_ENV"
           chmod -R u+rwX,go+rX "$CLANG_DIR"
           find "$CLANG_DIR/bin" -maxdepth 1 -type f -exec chmod +x {} +
-          ls -la "$GCC64_DIR/bin/aarch64-linux-android-gcc" "$GCC32_DIR/bin/arm-linux-androideabi-gcc"
-          "$CLANG_DIR/bin/clang" --version | head -1
 
-      - name: Config (official)
+      - name: Config (official) with diagnostics
         working-directory: kernel
         run: |
           set -uxo pipefail
@@ -104,12 +102,15 @@ jobs:
           mkdir -p out
           python3 "$GITHUB_WORKSPACE/scripts/extract_config.py" "$GITHUB_WORKSPACE/official_boot.img" out/.config || true
           echo "::notice::outconfig_size=$(stat -c%s out/.config 2>/dev/null || echo MISSING)"
-          test -s out/.config || { echo "::error::extract_config produced no out/.config"; exit 3; }
+          test -s out/.config || { echo "::error::no out.config"; exit 3; }
           cp "$GITHUB_WORKSPACE/scripts/kmake.sh" .
-          bash ./kmake.sh olddefconfig > /tmp/olddefconfig.log 2>&1 || {
-            tail -80 /tmp/olddefconfig.log | while IFS= read -r l; do echo "::error::olddefconfig: $l"; done
+          bash ./kmake.sh olddefconfig > /tmp/olddefconfig.log 2>&1 && ok=1 || ok=0
+          echo "::notice::olddefconfig_rc=$ok lines=$(wc -l < /tmp/olddefconfig.log)"
+          if [ "$ok" != "1" ]; then
+            head -20 /tmp/olddefconfig.log | while IFS= read -r l; do echo "::error::cfgHEAD: $l"; done
+            grep -nE 'Error [0-9]|error:|No rule|not found|Cannot|unmet|undefined|Kconfig:[0-9]' /tmp/olddefconfig.log | head -25 | while IFS= read -r l; do echo "::error::cfgERR: $l"; done
             exit 2
-          }
+          fi
           echo "KERNEL_RELEASE=$(bash ./kmake.sh -s kernelrelease 2>/dev/null | tail -1)" >> "$GITHUB_ENV"
 
       - name: Pin vermagic
@@ -148,14 +149,3 @@ jobs:
           path: boot-guacamoleb-opt.img
           if-no-files-found: error
           retention-days: 30
-
-      - name: Upload config and log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: config-and-log-opt-${{ github.sha }}
-          path: |
-            kernel/out/.config
-            build.log
-          if-no-files-found: warn
-          retention-days: 14
