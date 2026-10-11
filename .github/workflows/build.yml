@@ -1,19 +1,19 @@
-name: guacamoleb opt baseline
+name: guacamoleb stocklike build
 
 on:
   push:
-    branches: [main]
+    branches: [stocklike]
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: stocklike
   cancel-in-progress: true
 
 env:
   ARCH: arm64
   KERNEL_IMAGE: Image
   KERNEL_REPO: https://github.com/LineageOS/android_kernel_oneplus_sm8150
-  KERNEL_COMMIT: 0521dc291cf10bd754fb5ff385e74875c406d577
+  KERNEL_BRANCH: lineage-23.2
   CLANG_TARBALL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/9916fb51ccb914d62d35ad9a7b9b21d2ef046928/clang-r563880c.tar.gz
   GCC64_REPO: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9
   GCC64_BRANCH: lineage-19.1
@@ -30,6 +30,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Dependencies
         run: |
@@ -47,7 +49,6 @@ jobs:
         run: |
           set -euxo pipefail
           python3 scripts/fetch_boot.py "https://download.lineageos.org/api/v2/devices/guacamoleb/builds" "$GITHUB_WORKSPACE/official_boot.img"
-          ls -l "$GITHUB_WORKSPACE/official_boot.img"
 
       - name: Fetch avbtool
         run: |
@@ -58,19 +59,11 @@ jobs:
       - name: Fetch kernel source
         run: |
           set -euxo pipefail
-          git clone --depth=1 "$KERNEL_REPO" kernel
+          git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" kernel
           cd kernel
-          git fetch --depth=1 origin "$KERNEL_COMMIT"
-          git checkout --detach FETCH_HEAD
           git log --oneline -1
           git config user.name ci
           git config user.email ci@localhost
-
-      - name: Cache toolchains
-        uses: actions/cache@v4
-        with:
-          path: toolchain
-          key: toolchain-clang-r563880c-gcc49-v1
 
       - name: Fetch toolchains
         run: |
@@ -80,12 +73,10 @@ jobs:
           CLANG_DIR="$PWD/clang"
           GCC64_DIR="$PWD/gcc64"
           GCC32_DIR="$PWD/gcc32"
-          if [ ! -x "$CLANG_DIR/bin/clang" ]; then
-            mkdir -p "$CLANG_DIR"
-            curl -L --fail --retry 3 --retry-delay 5 --max-time 900 "$CLANG_TARBALL" -o clang.tar.gz
-            tar xzf clang.tar.gz -C "$CLANG_DIR"
-            rm -f clang.tar.gz
-          fi
+          mkdir -p "$CLANG_DIR"
+          curl -L --fail --retry 3 --retry-delay 5 --max-time 900 "$CLANG_TARBALL" -o clang.tar.gz
+          tar xzf clang.tar.gz -C "$CLANG_DIR"
+          rm -f clang.tar.gz
           [ -d "$GCC64_DIR" ] || git clone --depth=1 -b "$GCC64_BRANCH" "$GCC64_REPO" gcc64
           [ -d "$GCC32_DIR" ] || git clone --depth=1 -b "$GCC32_BRANCH" "$GCC32_REPO" gcc32
           echo "CLANG_DIR=$CLANG_DIR" >> "$GITHUB_ENV"
@@ -94,7 +85,7 @@ jobs:
           chmod -R u+rwX,go+rX "$CLANG_DIR"
           find "$CLANG_DIR/bin" -maxdepth 1 -type f -exec chmod +x {} +
 
-      - name: Config (official) with diagnostics
+      - name: Generate .config (official)
         working-directory: kernel
         run: |
           set -uxo pipefail
@@ -104,11 +95,11 @@ jobs:
           echo "::notice::outconfig_size=$(stat -c%s out/.config 2>/dev/null || echo MISSING)"
           test -s out/.config || { echo "::error::no out.config"; exit 3; }
           cp "$GITHUB_WORKSPACE/scripts/kmake.sh" .
-          bash ./kmake.sh olddefconfig > /tmp/olddefconfig.log 2>&1 && ok=1 || ok=0
-          echo "::notice::olddefconfig_rc=$ok lines=$(wc -l < /tmp/olddefconfig.log)"
+          bash ./kmake.sh olddefconfig > /tmp/od.log 2>&1 && ok=1 || ok=0
+          echo "::notice::olddefconfig_rc=$ok lines=$(wc -l < /tmp/od.log)"
           if [ "$ok" != "1" ]; then
-            head -20 /tmp/olddefconfig.log | while IFS= read -r l; do echo "::error::cfgHEAD: $l"; done
-            grep -nE 'Error [0-9]|error:|No rule|not found|Cannot|unmet|undefined|Kconfig:[0-9]' /tmp/olddefconfig.log | head -25 | while IFS= read -r l; do echo "::error::cfgERR: $l"; done
+            head -25 /tmp/od.log | while IFS= read -r l; do echo "::error::odHEAD: $l"; done
+            grep -nE 'Error [0-9]|error:|No rule|not found|Cannot|unmet|undefined|Kconfig' /tmp/od.log | head -25 | while IFS= read -r l; do echo "::error::odERR: $l"; done
             exit 2
           fi
           echo "KERNEL_RELEASE=$(bash ./kmake.sh -s kernelrelease 2>/dev/null | tail -1)" >> "$GITHUB_ENV"
