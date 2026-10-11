@@ -1,0 +1,251 @@
+name: Build guacamoleb kernel (LineageOS 23.2, optimization baseline)
+
+# Builds a flashable boot.img for OnePlus 7 (guacamoleb) from the LineageOS
+# 23.2 kernel source with NO root solution.
+#
+# This is the OPTIMIZATION baseline: it reproduces the official kernel as
+# closely as possible (same source commit, same config, same toolchain,
+# same vermagic, AVB re-signed) so that any performance/efficiency change
+# can be measured against a known-good, booting reference.
+#
+# Pipeline verified in guacamoleb-stock-kernel@pi/llvm-baseline:
+#   - kernel source pinned to the official build commit
+#   - configuration = exact official IKCONFIG (unmodified)
+#   - toolchain = clang-r563880c (build id 14054515), pure LLVM
+#   - ramdisk + DTB taken from the official boot.img, byte-identical
+#   - vermagic pinned, AVB footer re-signed and verified
+
+on:
+  push:
+    branches: [main, opt]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ARCH: arm64
+  KERNEL_IMAGE: Image
+  KERNEL_REPO: https://github.com/LineageOS/android_kernel_oneplus_sm8150
+  KERNEL_COMMIT: 0521dc291cf10bd754fb5ff385e74875c406d577
+  # Exact prebuilt revision from the 20260920 official build manifest.
+  CLANG_TARBALL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/9916fb51ccb914d62d35ad9a7b9b21d2ef046928/clang-r563880c.tar.gz
+  AVBTOOL_URL: https://android.googlesource.com/platform/external/avb/+/refs/heads/main/avbtool.py?format=TEXT
+
+jobs:
+  build:
+    name: Build Image + boot.img
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ccache cpio curl device-tree-compiler \
+            flex git kmod libelf-dev libssl-dev lz4 python3 rsync zip zstd
+          sudo ln -sf "$(command -v python3)" /usr/local/bin/python
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Fetch official boot.img
+        run: |
+          set -euxo pipefail
+          python3 scripts/fetch_boot.py \
+            "https://download.lineageos.org/api/v2/devices/guacamoleb/builds" \
+            "$GITHUB_WORKSPACE/official_boot.img"
+
+      - name: Fetch avbtool
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 3 --max-time 120 "$AVBTOOL_URL" -o avbtool.b64
+          python3 -c "import base64,pathlib;pathlib.Path('avbtool.py').write_bytes(base64.b64decode(pathlib.Path('avbtool.b64').read_bytes()));print('avbtool ok')"
+          python3 avbtool.py version
+
+      - name: Fetch kernel source
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 "$KERNEL_REPO" kernel
+          cd kernel
+          git fetch --depth=1 origin "$KERNEL_COMMIT"
+          git checkout --detach FETCH_HEAD
+          git log --oneline -1
+          git config user.name  "guacamoleb CI"
+          git config user.email "ci@localhost"
+
+      - name: Cache toolchains
+        uses: actions/cache@v4
+        with:
+          path: toolchain
+          key: toolchain-clang-r563880c-manifest-9916fb5-v1
+
+      - name: Fetch toolchains
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/toolchain"
+          cd "$GITHUB_WORKSPACE/toolchain"
+
+          CLANG_DIR="$PWD/clang"
+          if [ ! -x "$CLANG_DIR/bin/clang" ]; then
+            mkdir -p "$CLANG_DIR"
+            curl -L --fail --retry 3 --retry-delay 5 --max-time 900 \
+              "$CLANG_TARBALL" -o clang.tar.gz
+            tar xzf clang.tar.gz -C "$CLANG_DIR"
+            rm -f clang.tar.gz
+          else
+            echo "clang restored from cache"
+          fi
+
+          echo "CLANG_DIR=$CLANG_DIR" >> "$GITHUB_ENV"
+
+          chmod -R u+rwX,go+rX "$CLANG_DIR"
+          find "$CLANG_DIR/bin" -maxdepth 1 -type f -exec chmod +x {} +
+
+          "$CLANG_DIR/bin/clang" --version | head -1
+
+      # ------------------------------------------------------------------
+      # Generate .config: exact official configuration, no modifications.
+      # ------------------------------------------------------------------
+      - name: Generate .config (official)
+        working-directory: kernel
+        run: |
+          set -uxo pipefail
+          export PATH="$CLANG_DIR/bin:$PATH"
+          mkdir -p out
+          python3 "$GITHUB_WORKSPACE/scripts/extract_config.py" \
+            "$GITHUB_WORKSPACE/official_boot.img" out/.config
+
+          cp "$GITHUB_WORKSPACE/scripts/kmake.sh" .
+          bash ./kmake.sh olddefconfig > /tmp/olddefconfig.log 2>&1 \
+            || { tail -40 /tmp/olddefconfig.log; exit 2; }
+
+          cp out/.config "$GITHUB_WORKSPACE/out.config"
+          echo "KERNEL_RELEASE=$(bash ./kmake.sh -s kernelrelease 2>/dev/null | tail -1)" >> "$GITHUB_ENV"
+
+      - name: Pin vermagic (match official release string)
+        working-directory: kernel
+        run: |
+          set -euxo pipefail
+          python3 "$GITHUB_WORKSPACE/scripts/pin_vermagic.py" \
+            . "$GITHUB_WORKSPACE/official_boot.img" out/.config
+          release=$(bash ./kmake.sh -s kernelrelease | tail -1)
+          echo "KERNEL_RELEASE=$release" >> "$GITHUB_ENV"
+          echo "kernel release: $release"
+
+      - name: Build kernel + modules
+        working-directory: kernel
+        run: |
+          set -uxo pipefail
+          export PATH="$CLANG_DIR/bin:$PATH"
+          cp "$GITHUB_WORKSPACE/scripts/kmake.sh" .
+
+          bash ./kmake.sh -j"$(nproc --all)" "$KERNEL_IMAGE" modules \
+            > "$GITHUB_WORKSPACE/build.log" 2>&1
+          rc=$?
+          tail -40 "$GITHUB_WORKSPACE/build.log"
+          if [ "$rc" -ne 0 ]; then
+            grep -E 'error:|Error [0-9]|undefined (reference|symbol)' \
+              "$GITHUB_WORKSPACE/build.log" | head -30 \
+              | while IFS= read -r line; do echo "::error::build: ${line}"; done
+            exit "$rc"
+          fi
+
+          echo "--- built modules ---"
+          find out -name '*.ko' -type f -printf '%P  (%s bytes)\n' | sort
+          echo "MODULE_COUNT=$(find out -name '*.ko' -type f | wc -l)" >> "$GITHUB_ENV"
+
+      # ------------------------------------------------------------------
+      # Compare against the official kernel: release string and clang build
+      # id must match exactly; kernel size delta is printed for reference.
+      # ------------------------------------------------------------------
+      - name: Verify kernel artifacts
+        working-directory: kernel
+        run: |
+          set -euxo pipefail
+          IMG="out/arch/arm64/boot/${KERNEL_IMAGE}"
+          test -s "$IMG" || { echo "::error::${IMG} not produced"; exit 1; }
+          ls -lh "$IMG"
+          echo "release: $KERNEL_RELEASE"
+
+          official=$(python3 "$GITHUB_WORKSPACE/scripts/artifact_info.py" --release "$GITHUB_WORKSPACE/official_boot.img")
+          ours=$(python3 "$GITHUB_WORKSPACE/scripts/artifact_info.py" --release "$IMG")
+          echo "release  official='$official' ours='$ours'"
+          [ "$official" = "$ours" ] || { echo "::error::release mismatch"; exit 1; }
+
+          official_cc=$(python3 "$GITHUB_WORKSPACE/scripts/artifact_info.py" --clang-build-id "$GITHUB_WORKSPACE/official_boot.img")
+          our_cc=$(python3 "$GITHUB_WORKSPACE/scripts/artifact_info.py" --clang-build-id "$IMG")
+          echo "clang id official='$official_cc' ours='$our_cc'"
+          [ "$official_cc" = "$our_cc" ] || { echo "::error::clang build id mismatch (stale cache?)"; exit 1; }
+
+          echo "--- size comparison ---"
+          python3 "$GITHUB_WORKSPACE/scripts/compare_size.py" \
+            "$GITHUB_WORKSPACE/official_boot.img" "$IMG"
+
+      - name: Repack boot image (with AVB re-sign)
+        run: |
+          set -euxo pipefail
+          python3 scripts/repack_boot.py \
+            "kernel/out/arch/arm64/boot/${KERNEL_IMAGE}" \
+            "$GITHUB_WORKSPACE/official_boot.img" \
+            "$GITHUB_WORKSPACE/boot-guacamoleb-opt.img" \
+            avbtool.py
+          ls -lh "$GITHUB_WORKSPACE"/boot-guacamoleb-opt.img
+
+          mkdir -p avbcheck
+          cp "$GITHUB_WORKSPACE"/boot-guacamoleb-opt.img avbcheck/boot.img
+          python3 avbtool.py verify_image --image avbcheck/boot.img
+
+      - name: Upload boot.img
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-guacamoleb-opt
+          path: boot-guacamoleb-opt.img
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload raw kernel image
+        uses: actions/upload-artifact@v4
+        with:
+          name: Image-opt-${{ github.sha }}
+          path: kernel/out/arch/arm64/boot/Image
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload .config and build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-and-log-opt-${{ github.sha }}
+          path: |
+            kernel/out/.config
+            build.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## guacamoleb kernel (optimization baseline)"
+            echo
+            echo "| item | value |"
+            echo "|---|---|"
+            echo "| kernel release | \`${KERNEL_RELEASE:-n/a}\` |"
+            echo "| config | exact official IKCONFIG (unmodified) |"
+            echo "| toolchain | clang-r563880c (build 14054515) |"
+            echo "| modules | ${MODULE_COUNT:-0} |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.zip
+*.img
+*.bin
+*.b64
+official_boot.img
+official.config
+kernel/
+toolchain/
+build.log
+avbtool.py
+avbcheck/
