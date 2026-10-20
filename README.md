@@ -40,19 +40,44 @@ downloaded — never a stale local copy.
 ## Toolchain: why it is resolved, not pinned
 
 The official kernel states its own toolchain build id in the banner
-(`Android (15071444, …)`). With LTO + ThinLTO + Shadow Call Stack a different
-clang changes early-boot codegen — that is exactly how a device hangs before
-the logo. So the build id is read from the official image and the matching
-prebuilt is looked up in the AOSP prebuilts tree
-(`scripts/fetch_toolchain.sh`). If no prebuilt matches, the build **fails
-loudly** and lists the candidates it found — it never falls back silently.
+(`Android (15071444, +pgo, +bolt, +lto, +mlgo, based on r596125)`), so the
+expected values are read from the official image instead of being hardcoded.
+With LTO + ThinLTO + Shadow Call Stack a different clang changes early-boot
+codegen — that is exactly how a device hangs before the logo.
 
-> Current state: the public `mirror-goog-llvm-r596125-release` branch
-> exposes `clang-r584948b` (build 14863223) as its newest prebuilt, while the
-> official 24.0 kernel was built with build **15071444**. The reference build
-> therefore cannot complete until AOSP publishes that prebuilt. The branch is
-> ready and will pick it up automatically once it appears.
+Two things make the lookup non-obvious, both measured:
 
+**1. The right branch is not the one named after the LLVM revision.**
+`platform/prebuilts/clang/host/linux-x86` carries several mirrors:
+
+| branch | state |
+|---|---|
+| `mirror-goog-llvm-r596125-release` | tip Feb 2026, newest prebuilt `clang-r584948b` — **the needed one is absent** |
+| `mirror-goog-main-llvm-toolchain-source` | tip Oct 2026, contains `clang-r584948b`, `clang-r596125`, `clang-r614150` — **this is the one** |
+
+**2. The directory is rewritten in place, so the tip holds the wrong build.**
+`clang-r596125` was refreshed several times:
+
+```
+24 Mar 2026  build 15071444  (commit 9b144bef)   <- the official kernel
+Apr 2026     build 15241605
+Jun 2026     build 15544236
+Jun 2026     build 15682573  (tip)               <- same LLVM rev, other build
+```
+
+Same LLVM revision, same clang 22.0.2, different build. So the resolver walks
+the branch history for the commit whose message says
+`from build <id>`, confirms it with a cheap `BUILD_INFO` read, and only then
+downloads the archive from that commit.
+
+The prebuilt binaries are **x86_64 Linux** (ELF machine `0x3e`), so
+`bin/clang --version` cannot be executed on the phone. Verification therefore
+uses `BUILD_INFO` (`"bid": "15071444"`), not a test run.
+
+`artifact_info.py --llvm-rev` extracts `r596125` from the banner, which is what
+names the directory.
+
+## Branches
 ## Branches
 
 | branch | what it is |
