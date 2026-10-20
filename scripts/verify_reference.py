@@ -4,7 +4,7 @@ verify_reference.py - 1:1 gate between a built kernel and the official one.
 
 Used by every branch of this repository so the tooling stays identical and
 the comparison baseline is always the official boot.img that CI just
-downloaded. Three checks, in decreasing strictness:
+downloaded. Checks, in decreasing strictness:
 
   1. clang build id  - HARD gate. With LTO + ThinLTO + Shadow Call Stack a
      different clang changes early-boot codegen, which is exactly what makes
@@ -14,9 +14,12 @@ downloaded. Three checks, in decreasing strictness:
   2. release string  - HARD gate. The stock vendor WLAN module
      (qca_cld3_wlan.ko) is built with CONFIG_MODVERSIONS=y and only loads
      against the exact vermagic of the kernel it was built with.
-  3. payload hash   - only with --require-identical. Identical means the
-     same bytes; used by the pure reference branch, where no config delta
-     and no extra patches are applied.
+  3. payload hash   - only with --require-identical. The appended IKCONFIG
+     is stripped before hashing, because `olddefconfig` rewrites it.
+
+The kernel payload is located the same way the scheduler check locates it
+(kernelimg.py): the boot header of this image carries an unusable
+kernel_size, so slicing by it would run into the ramdisk.
 
 Usage:
     verify_reference.py <built-kernel|boot.img> <official-boot.img> [--require-identical]
@@ -32,15 +35,39 @@ import sys
 CLANG_ID_RE = re.compile(rb'Android \((\d+),')
 RELEASE_RE = re.compile(rb'Linux version (\S+) ')
 
+BOOT_MAGIC = b'ANDROID!'
+
+
+def _gzip_end(blob, start):
+    import zlib
+    try:
+        do = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        do.decompress(blob[start:])
+        do.flush()
+        return start + (len(blob[start:]) - len(do.unused_data))
+    except Exception:
+        return None
+
 
 def read_kernel(path):
-    """Return the kernel blob from an Android boot image or a raw Image."""
+    """Return the kernel payload from an Android boot image or a raw Image.
+
+    The kernel ends after the appended IKCONFIG gzip; the boot header of
+    this image has a kernel_size that does not match the real kernel.
+    """
     blob = open(path, 'rb').read()
-    if blob[:8] == b'ANDROID!':
-        page = struct.unpack('<I', blob[36:40])[0]
-        ksize = struct.unpack('<I', blob[8:12])[0]
+    if blob[:8] != BOOT_MAGIC:
+        return blob
+    page = struct.unpack('<I', blob[36:40])[0] or 4096
+    i = blob.find(b'IKCFG_ST', page)
+    if i >= 0:
+        end = _gzip_end(blob, i + 8)
+        if end and end > i:
+            return blob[page:end]
+    ksize = struct.unpack('<I', blob[8:12])[0]
+    if 0 < ksize <= len(blob) - page:
         return blob[page:page + ksize]
-    return blob
+    return blob[page:]
 
 
 def clang_build_id(kernel):
@@ -76,14 +103,15 @@ def strip_ikconfig(kernel):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith('--')]
-    flags = {a for a in sys.argv[1:] if a.startswith('--')}
-    if len(args) != 2:
+    argv = sys.argv[1:]
+    positional = [a for a in argv if not a.startswith('--')]
+    flags = [a for a in argv if a.startswith('--')]
+    if len(positional) != 2:
         print(__doc__)
         return 1
 
-    built = read_kernel(args[0])
-    official = read_kernel(args[1])
+    built = read_kernel(positional[0])
+    official = read_kernel(positional[1])
 
     built_payload, built_cfg = strip_ikconfig(built)
     official_payload, official_cfg = strip_ikconfig(official)
@@ -127,8 +155,7 @@ def main():
         else:
             print('OK    payload sha256 identical')
     else:
-        delta = len(built) - len(official)
-        print('INFO  payload size delta: %+d bytes' % delta)
+        print('INFO  payload size delta: %+d bytes' % (len(built) - len(official)))
 
     if '--expect-identical' in flags and built_sha != official_sha:
         print('NOTE  payload differs - expected for a branch with a config delta')

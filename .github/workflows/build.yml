@@ -1,8 +1,8 @@
-name: guacamoleb 24 reference (1:1)
+name: guacamoleb 24 kyber (blk-mq + kyber)
 
 on:
   push:
-    branches: [24]
+    branches: [kyber]
   workflow_dispatch:
 
 concurrency:
@@ -51,6 +51,8 @@ jobs:
           ls -l "$GITHUB_WORKSPACE/official_boot.img"
           echo "official kernel metadata:"
           python3 scripts/artifact_info.py --info "$GITHUB_WORKSPACE/official_boot.img"
+          echo "official kernel schedulers:"
+          python3 scripts/check_schedulers.py "$GITHUB_WORKSPACE/official_boot.img"
 
       - name: Fetch avbtool
         run: |
@@ -86,8 +88,6 @@ jobs:
           [ -d "$GCC32_DIR" ] || git clone --depth=1 -b "$GCC32_BRANCH" "$GCC32_REPO" gcc32
           echo "GCC64_DIR=$GCC64_DIR" >> "$GITHUB_ENV"
           echo "GCC32_DIR=$GCC32_DIR" >> "$GITHUB_ENV"
-          # Тулчейн подбирается по build id из официального ядра: другой clang
-          # при LTO+Shadow Call Stack меняет код ранней загрузки.
           bash "$GITHUB_WORKSPACE/scripts/fetch_toolchain.sh" \
             "$GITHUB_WORKSPACE/official_boot.img" "$PWD"
           CLANG_DIR="$PWD/clang"
@@ -96,7 +96,7 @@ jobs:
           "$CLANG_DIR/bin/clang" --version | head -1
           echo "CLANG_DIR=$CLANG_DIR" >> "$GITHUB_ENV"
 
-      - name: Config (official, no delta)
+      - name: Config (official + kyber delta)
         working-directory: kernel
         run: |
           set -uxo pipefail
@@ -105,7 +105,19 @@ jobs:
           python3 "$GITHUB_WORKSPACE/scripts/extract_config.py" "$GITHUB_WORKSPACE/official_boot.img" out/.config || true
           echo "::notice::outconfig_size=$(stat -c%s out/.config 2>/dev/null || echo MISSING)"
           test -s out/.config || { echo "::error::extract_config produced no out/.config"; exit 3; }
-          # Эталонная линия: конфиг официальный, без единой правки.
+          # --- the delta: this branch's only change ---
+          # 1) move the SCSI midlayer to blk-mq, so the mq schedulers become
+          #    selectable at all (on the legacy path only noop/deadline/cfq exist);
+          # 2) re-assert kyber: the official IKCONFIG already claims
+          #    CONFIG_MQ_IOSCHED_KYBER=y, yet the shipped kernel contains no
+          #    kyber code at all. The config is not the truth - the binary is.
+          sed -i 's/^# CONFIG_SCSI_MQ_DEFAULT is not set$/CONFIG_SCSI_MQ_DEFAULT=y/' out/.config
+          grep -q '^CONFIG_SCSI_MQ_DEFAULT=y' out/.config || { echo "::error::SCSI_MQ_DEFAULT not =y"; exit 4; }
+          if grep -q '^# CONFIG_MQ_IOSCHED_KYBER is not set$' out/.config; then
+            sed -i 's/^# CONFIG_MQ_IOSCHED_KYBER is not set$/CONFIG_MQ_IOSCHED_KYBER=y/' out/.config
+            echo "::notice::MQ_IOSCHED_KYBER was disabled in the official config - re-enabled"
+          fi
+          grep -q '^CONFIG_MQ_IOSCHED_KYBER=y' out/.config || { echo "::error::MQ_IOSCHED_KYBER not =y"; exit 5; }
           cp "$GITHUB_WORKSPACE/scripts/kmake.sh" .
           bash ./kmake.sh olddefconfig > /tmp/olddefconfig.log 2>&1 || {
             tail -80 /tmp/olddefconfig.log | while IFS= read -r l; do echo "::error::olddefconfig: $l"; done
@@ -134,34 +146,46 @@ jobs:
             exit "$rc"
           fi
 
-      - name: Verify 1:1 against the official kernel
+      - name: Verify kyber is really linked
         run: |
           set -euxo pipefail
+          # The config is not the truth: the official kernel claims
+          # CONFIG_MQ_IOSCHED_KYBER=y while containing no kyber code. Check the
+          # binary itself, and fail the build if kyber did not make it in.
+          python3 scripts/check_schedulers.py \
+            "kernel/out/arch/arm64/boot/${KERNEL_IMAGE}" \
+            --require kyber --forbid cfq
+
+      - name: Verify against the official kernel
+        run: |
+          set -euxo pipefail
+          # Not --require-identical: this branch carries a config delta, so the
+          # payload hash must differ. build id and release string still must
+          # match, otherwise the stock vendor WLAN module will not load.
           python3 scripts/verify_reference.py \
             "kernel/out/arch/arm64/boot/${KERNEL_IMAGE}" \
-            "$GITHUB_WORKSPACE/official_boot.img" \
-            --require-identical
+            "$GITHUB_WORKSPACE/official_boot.img"
 
       - name: Repack boot
         run: |
           set -euxo pipefail
-          python3 scripts/repack_boot.py "kernel/out/arch/arm64/boot/${KERNEL_IMAGE}" "$GITHUB_WORKSPACE/official_boot.img" "$GITHUB_WORKSPACE/boot-guacamoleb-24-ref.img" avbtool.py
+          python3 scripts/repack_boot.py "kernel/out/arch/arm64/boot/${KERNEL_IMAGE}" "$GITHUB_WORKSPACE/official_boot.img" "$GITHUB_WORKSPACE/boot-guacamoleb-24-kyber.img" avbtool.py
           mkdir -p avbcheck
-          cp "$GITHUB_WORKSPACE"/boot-guacamoleb-24-ref.img avbcheck/boot.img
+          cp "$GITHUB_WORKSPACE"/boot-guacamoleb-24-kyber.img avbcheck/boot.img
           python3 avbtool.py verify_image --image avbcheck/boot.img
 
       - name: Upload boot.img
         uses: actions/upload-artifact@v4
         with:
-          name: boot-guacamoleb-24-ref
-          path: boot-guacamoleb-24-ref.img
+          name: boot-guacamoleb-24-kyber
+          path: boot-guacamoleb-24-kyber.img
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload Image
         uses: actions/upload-artifact@v4
         with:
-          name: Image-24-ref-${{ github.sha }}
+          name: Image-24-kyber-${{ github.sha }}
           path: kernel/out/arch/arm64/boot/${KERNEL_IMAGE}
           if-no-files-found: warn
           retention-days: 14
@@ -170,7 +194,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: config-and-log-24-ref-${{ github.sha }}
+          name: config-and-log-24-kyber-${{ github.sha }}
           path: |
             kernel/out/.config
             build.log
