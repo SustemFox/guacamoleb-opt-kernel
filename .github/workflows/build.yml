@@ -2,7 +2,7 @@ name: guacamoleb 24 reference (stock-equivalent)
 
 on:
   push:
-    branches: [24]
+    branches: [23ctl]
   workflow_dispatch:
 
 concurrency:
@@ -22,6 +22,10 @@ env:
   GCC32_BRANCH: lineage-19.1
   AVBTOOL_URL: https://android.googlesource.com/platform/external/avb/+/refs/heads/main/avbtool.py?format=TEXT
   KERNEL_DIR: /lineage/lineage-24.0/kernel/oneplus/sm8150
+  # Контрольный эксперимент: собираем LineageOS 23.2 тем же рецептом,
+  # что и 24.0, и сравниваем с ОФИЦИАЛЬНЫМ 23.2. Если отличий много и
+  # 23.2 при этом грузился - значит, само расхождение кода не смертельно.
+  BOOT_URL: https://mirrorbits.lineageos.org/full/guacamoleb/20261004/boot.img
   # Баннер официального ядра: "#0 SMP PREEMPT Sun Oct 18 01:17:55 UTC 2026"
   # и "root@32db8f4874f2". Эти четыре переменные воспроизводят его байт в байт.
   KBUILD_BUILD_USER: root
@@ -54,7 +58,7 @@ jobs:
       - name: Fetch official boot.img
         run: |
           set -euxo pipefail
-          python3 scripts/fetch_boot.py "https://download.lineageos.org/api/v2/devices/guacamoleb/builds" "$GITHUB_WORKSPACE/official_boot.img"
+          python3 scripts/fetch_boot.py "${BOOT_URL:-https://download.lineageos.org/api/v2/devices/guacamoleb/builds}" "$GITHUB_WORKSPACE/official_boot.img"
           ls -l "$GITHUB_WORKSPACE/official_boot.img"
           echo "official kernel metadata:"
           python3 scripts/artifact_info.py --info "$GITHUB_WORKSPACE/official_boot.img"
