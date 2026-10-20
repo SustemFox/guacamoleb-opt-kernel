@@ -15,7 +15,7 @@ env:
   KERNEL_REPO: https://github.com/LineageOS/android_kernel_oneplus_sm8150
   KERNEL_COMMIT: 0521dc291cf10bd754fb5ff385e74875c406d577
   PREBUILTS_REPO: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86
-  PREBUILTS_BRANCH: mirror-goog-llvm-r596125-release
+  PREBUILTS_BRANCH: mirror-goog-main-llvm-toolchain-source
   GCC64_REPO: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9
   GCC64_BRANCH: lineage-19.1
   GCC32_REPO: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9
