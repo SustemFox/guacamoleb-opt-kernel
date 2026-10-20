@@ -7,7 +7,7 @@ set -euo pipefail
 : "${GCC32_DIR:?GCC32_DIR not set}"
 
 exec make "$@" \
-  O=out ARrm64 \
+  O=out \
   CC="$CLANG_DIR/bin/clang" \
   CLANG_TRIPLE=aarch64-linux-gnu- \
   CROSS_COMPILE="$GCC64_DIR/bin/aarch64-linux-android-" \
