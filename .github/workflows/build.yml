@@ -2,7 +2,7 @@ name: guacamoleb 24 reference (stock-equivalent)
 
 on:
   push:
-    branches: [24]
+    branches: [24-purellvm]
   workflow_dispatch:
 
 concurrency:
