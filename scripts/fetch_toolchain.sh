@@ -23,11 +23,19 @@
 # Для r596125 в истории были сборки 15071444 (24 марта) -> 15241605 ->
 # 15544236 -> 15682573. Официальное ядро собрано сборкой 15071444, а на tip
 # лежит уже 15682573 - та же ревизия LLVM, но другой build.
-# Поэтому нужный build ищется по истории: коммит с текстом
-# "Update prebuilt Clang to rNNNNNN (...) from build NNNNNNNN".
 #
-# Так как каталог перезаписывается, архив берётся не с tip, а с того коммита,
-# где каталог содержал нужный build.
+# Как выбирается коммит:
+#   1) в истории ветки ищется коммит с текстом
+#      "Update prebuilt Clang to rNNNNNN (...) from build NNNNNNNN";
+#   2) BUILD_INFO по этому коммиту читается как дешёвая проверка (без
+#      скачивания гигабайтного архива). Если он недоступен (rate limit,
+#      сеть) - это НЕ повод отбрасывать кандидата: текст коммита уже
+#      называет сборку, а окончательная сверка идёт после распаковки;
+#   3) архив качается из найденного коммита, и BUILD_INFO распакованного
+#      тулчейна сверяется с нужным build id. Несовпадение - ошибка сборки.
+#
+# Бинарники тулчейна - x86_64 Linux (ELF 0x3e), на телефоне не запускаются,
+# поэтому сверка идёт по BUILD_INFO, а не по clang --version.
 #
 # Использование:
 #   fetch_toolchain.sh <official-boot.img> <out-dir> [--list]
@@ -52,10 +60,10 @@ log "официальное ядро: clang build id = $WANT_ID, LLVM = $WANT_RE
 DIR="clang-$WANT_REV"
 log "каталог prebuilt: $DIR"
 
-# --- ищем коммит, где этот каталог содержал нужный build ---
-# Коммиты обновления несут в теле "from build NNNNNNNN".
+# --- коммит, где этот каталог содержал нужный build ---
 find_commit_for_build() { # <branch>
-  curl -s --compressed -m 90 "$REPO/+log/refs/heads/$1?format=JSON&n=400" 2>/dev/null \
+  curl -s --compressed --retry 3 --retry-delay 2 -m 90 \
+    "$REPO/+log/refs/heads/$1?format=JSON&n=400" 2>/dev/null \
     | tail -c +6 \
     | python3 -c "
 import json,sys
@@ -70,15 +78,23 @@ for c in d.get('log',[]):
 " "$WANT_ID" "$WANT_REV"
 }
 
-# --- build id по BUILD_INFO в конкретном коммите (дешёвый запрос, без архива) ---
+# --- build id по BUILD_INFO в конкретном коммите (дешёвая проверка) ---
+# Возвращает пусто, если прочитать не удалось: это не приговор кандидату.
 bid_at_commit() { # <sha> <dir>
-  curl -s --compressed -m 40 "$REPO/+/$1/$2/BUILD_INFO?format=TEXT" 2>/dev/null \
-    | base64 -d 2>/dev/null \
-    | grep -oE '"bid": *"[0-9]+"' | head -1 | grep -oE '[0-9]+'
+  local body code
+  body=$(curl -s --compressed --retry 2 -m 40 -w '\n%{http_code}' \
+    "$REPO/+/$1/$2/BUILD_INFO?format=TEXT" 2>/dev/null || true)
+  code=$(printf '%s' "$body" | tail -1)
+  if [ "$code" != "200" ]; then
+    log "  BUILD_INFO: HTTP ${code:-нет ответа} (проверю после распаковки)"
+    return 0
+  fi
+  printf '%s' "$body" | sed '$d' | base64 -d 2>/dev/null \
+    | grep -oE '"bid": *"[0-9]+"' | head -1 | grep -oE '[0-9]+' || true
 }
 
 branch_tip() {
-  curl -s --compressed -m 60 "$REPO/+log/refs/heads/$1?format=JSON&n=1" 2>/dev/null \
+  curl -s --compressed --retry 3 -m 60 "$REPO/+log/refs/heads/$1?format=JSON&n=1" 2>/dev/null \
     | tail -c +6 | grep -oE '"commit": "[0-9a-f]{40}"' | head -1 | cut -d'"' -f4
 }
 
@@ -89,7 +105,7 @@ if [ "$LIST_ONLY" = "1" ]; then
   for b in $BRANCHES; do
     [ -n "$b" ] || continue
     echo "branch $b:"
-    echo "  tip          : $(branch_tip "$b")"
+    echo "  tip                : $(branch_tip "$b")"
     echo "  commit для $WANT_ID: $(find_commit_for_build "$b")"
   done
   exit 0
@@ -103,16 +119,22 @@ FOUND_SHA=""
 for b in $BRANCHES; do
   [ -n "$b" ] || continue
   sha=$(find_commit_for_build "$b")
-  if [ -n "$sha" ]; then
-    got=$(bid_at_commit "$sha" "$DIR" || true)
-    log "ветка $b: коммит ${sha:0:12} даёт $DIR с build id ${got:-?}"
-    if [ "$got" = "$WANT_ID" ]; then
-      FOUND_SHA="$sha"
-      break
-    fi
-  else
-    log "ветка $b: коммита со сборкой $WANT_ID не найдено в истории"
+  if [ -z "$sha" ]; then
+    log "ветка $b: коммита со сборкой $WANT_ID нет в истории"
+    continue
   fi
+  got=$(bid_at_commit "$sha" "$DIR")
+  if [ -z "$got" ]; then
+    log "ветка $b: коммит ${sha:0:12} заявляет сборку $WANT_ID, BUILD_INFO недоступен - сверю после распаковки"
+    FOUND_SHA="$sha"
+    break
+  fi
+  log "ветка $b: коммит ${sha:0:12} -> $DIR, build id $got"
+  if [ "$got" = "$WANT_ID" ]; then
+    FOUND_SHA="$sha"
+    break
+  fi
+  log "  build id $got != $WANT_ID, ищу дальше"
 done
 
 # запасной путь: tip ветки (вдруг каталог не перезаписывали)
@@ -121,14 +143,14 @@ if [ -z "$FOUND_SHA" ]; then
     [ -n "$b" ] || continue
     sha=$(branch_tip "$b")
     [ -n "$sha" ] || continue
-    got=$(bid_at_commit "$sha" "$DIR" || true)
+    got=$(bid_at_commit "$sha" "$DIR")
     log "ветка $b: tip ${sha:0:12} даёт build id ${got:-?}"
     [ "$got" = "$WANT_ID" ] && { FOUND_SHA="$sha"; break; }
   done
 fi
 
 [ -n "$FOUND_SHA" ] || {
-  echo "::error::не найден коммит с $DIR, содержащим clang build id $WANT_ID." >&2
+  echo "::error::не найден коммит с $DIR для clang build id $WANT_ID." >&2
   echo "::error::репозиторий: $REPO" >&2
   exit 1
 }
@@ -148,12 +170,14 @@ fi
 found=$(find "$TMP" -maxdepth 3 -name clang -type f -path '*/bin/clang' | head -1 || true)
 [ -n "$found" ] || { echo "::error::в архиве нет bin/clang" >&2; exit 1; }
 
-# сверяем BUILD_INFO распакованного архива - это не требует запуска бинарника
-# (бинарники x86_64 Linux, на телефоне не запускаются)
+# окончательная сверка: BUILD_INFO распакованного тулчейна
 if [ -f "$TMP/BUILD_INFO" ]; then
-  got=$(grep -oE '"bid": *"[0-9]+"' "$TMP/BUILD_INFO" | head -1 | grep -oE '[0-9]+')
+  got=$(grep -oE '"bid": *"[0-9]+"' "$TMP/BUILD_INFO" | head -1 | grep -oE '[0-9]+' || true)
   log "BUILD_INFO распакованного тулчейна: build id ${got:-?}"
   [ "$got" = "$WANT_ID" ] || { echo "::error::build id не совпал: ${got:-?} != $WANT_ID" >&2; exit 1; }
+else
+  echo "::error::в архиве нет BUILD_INFO - сверить нечем" >&2
+  exit 1
 fi
 
 rm -rf "$OUT/clang"; mkdir -p "$OUT/clang"
