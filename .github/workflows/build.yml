@@ -21,6 +21,13 @@ env:
   GCC32_REPO: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9
   GCC32_BRANCH: lineage-19.1
   AVBTOOL_URL: https://android.googlesource.com/platform/external/avb/+/refs/heads/main/avbtool.py?format=TEXT
+  KERNEL_DIR: /lineage/lineage-24.0/kernel/oneplus/sm8150
+  # Баннер официального ядра: "#0 SMP PREEMPT Sun Oct 18 01:17:55 UTC 2026"
+  # и "root@32db8f4874f2". Эти четыре переменные воспроизводят его байт в байт.
+  KBUILD_BUILD_USER: root
+  KBUILD_BUILD_HOST: 32db8f4874f2
+  KBUILD_BUILD_VERSION: "0"
+  KBUILD_BUILD_TIMESTAMP: "2026-10-18 01:17:55 UTC"
 
 jobs:
   build:
@@ -61,8 +68,13 @@ jobs:
       - name: Fetch kernel source
         run: |
           set -euxo pipefail
-          git clone --depth=1 "$KERNEL_REPO" kernel
-          cd kernel
+          # Официальная сборка шла из /lineage/lineage-24.0/kernel/oneplus/sm8150:
+          # этот путь зашит в строки образа (arch/arm64/kernel/entry.S), а их
+          # длина сдвигает .rodata и, значит, все ссылки из кода.
+          sudo mkdir -p "$(dirname "$KERNEL_DIR")"
+          sudo chown -R "$(id -u):$(id -g)" /lineage
+          git clone --depth=1 "$KERNEL_REPO" "$KERNEL_DIR"
+          cd "$KERNEL_DIR"
           git fetch --depth=1 origin "$KERNEL_COMMIT"
           git checkout --detach FETCH_HEAD
           git log --oneline -1
@@ -97,7 +109,7 @@ jobs:
           echo "CLANG_DIR=$CLANG_DIR" >> "$GITHUB_ENV"
 
       - name: Config (official, no delta)
-        working-directory: kernel
+        working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -uxo pipefail
           export PATH="$CLANG_DIR/bin:$GCC64_DIR/bin:$GCC32_DIR/bin:$PATH"
@@ -114,14 +126,14 @@ jobs:
           echo "KERNEL_RELEASE=$(bash ./kmake.sh -s kernelrelease 2>/dev/null | tail -1)" >> "$GITHUB_ENV"
 
       - name: Pin vermagic
-        working-directory: kernel
+        working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -euxo pipefail
           python3 "$GITHUB_WORKSPACE/scripts/pin_vermagic.py" . "$GITHUB_WORKSPACE/official_boot.img" out/.config
           echo "KERNEL_RELEASE=$(bash ./kmake.sh -s kernelrelease | tail -1)" >> "$GITHUB_ENV"
 
       - name: Build kernel
-        working-directory: kernel
+        working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -uxo pipefail
           export PATH="$CLANG_DIR/bin:$GCC64_DIR/bin:$GCC32_DIR/bin:$PATH"
@@ -139,7 +151,7 @@ jobs:
         run: |
           set -uxo pipefail
           python3 scripts/diff_report.py \
-            "kernel/out/arch/arm64/boot/${KERNEL_IMAGE}" \
+            "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" \
             "$GITHUB_WORKSPACE/official_boot.img" --top 30 || true
 
       - name: Verify 1:1 against the official kernel
@@ -147,7 +159,7 @@ jobs:
         run: |
           set -euxo pipefail
           python3 scripts/verify_reference.py \
-            "kernel/out/arch/arm64/boot/${KERNEL_IMAGE}" \
+            "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" \
             "$GITHUB_WORKSPACE/official_boot.img" \
             --require-identical
 
@@ -155,7 +167,7 @@ jobs:
         if: always()
         run: |
           set -euxo pipefail
-          python3 scripts/repack_boot.py "kernel/out/arch/arm64/boot/${KERNEL_IMAGE}" "$GITHUB_WORKSPACE/official_boot.img" "$GITHUB_WORKSPACE/boot-guacamoleb-24-ref.img" avbtool.py
+          python3 scripts/repack_boot.py "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" "$GITHUB_WORKSPACE/official_boot.img" "$GITHUB_WORKSPACE/boot-guacamoleb-24-ref.img" avbtool.py
           mkdir -p avbcheck
           cp "$GITHUB_WORKSPACE"/boot-guacamoleb-24-ref.img avbcheck/boot.img
           python3 avbtool.py verify_image --image avbcheck/boot.img
@@ -174,7 +186,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Image-24-ref-${{ github.sha }}
-          path: kernel/out/arch/arm64/boot/${{ env.KERNEL_IMAGE }}
+          path: ${{ env.KERNEL_DIR }}/out/arch/arm64/boot/${{ env.KERNEL_IMAGE }}
           if-no-files-found: warn
           retention-days: 14
 
@@ -184,7 +196,8 @@ jobs:
         with:
           name: config-and-log-24-ref-${{ github.sha }}
           path: |
-            kernel/out/.config
+            ${{ env.KERNEL_DIR }}/out/.config
             build.log
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
