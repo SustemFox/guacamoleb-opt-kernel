@@ -1,8 +1,8 @@
-name: guacamoleb 24 reference (stock-equivalent)
+name: guacamoleb 24 netsched (fq_codel + fq)
 
 on:
   push:
-    branches: [24]
+    branches: [netsched]
   workflow_dispatch:
 
 concurrency:
@@ -108,7 +108,7 @@ jobs:
           "$CLANG_DIR/bin/clang" --version | head -1
           echo "CLANG_DIR=$CLANG_DIR" >> "$GITHUB_ENV"
 
-      - name: Config (official, no delta)
+      - name: Config (official + net scheduler delta)
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -uxo pipefail
@@ -123,6 +123,32 @@ jobs:
             tail -80 /tmp/olddefconfig.log | while IFS= read -r l; do echo "::error::olddefconfig: $l"; done
             exit 2
           }
+          # --- дельта этой ветки: сетевые планировщики ---
+          # В стоковом ядре нет ни fq_codel, ни fq, ни codel: из qdisc есть
+          # только pfifo_fast, htb, tbf, prio, multiq. Поэтому на телефоне
+          # весь трафик идёт через pfifo_fast - без борьбы с задержками под
+          # нагрузкой (bufferbloat). Включаем то, что использует Android:
+          #   fq_codel - fair queue + CoDel, стандарт для Wi-Fi и тетеринга;
+          #   fq       - fair queue с пейсингом по sk_pacing_rate (сотовая сеть);
+          #   codel    - сам CoDel, нужен как отдельный qdisc для ручных схем;
+          #   pie      - альтернативный AQM, на случай если CoDel не подойдёт.
+          # Планировщик по умолчанию НЕ меняем (остаётся pfifo_fast): в ядре
+          # CONFIG_NET_SCH_DEFAULT не выставлен, поэтому поведение системы
+          # не меняется, пока мы не включим qdisc вручную через tc или sysctl.
+          for opt in NET_SCH_CODEL NET_SCH_FQ_CODEL NET_SCH_FQ NET_SCH_PIE; do
+            if grep -q "^CONFIG_${opt}=y$" out/.config; then
+              echo "::notice::${opt} уже включён"
+            elif grep -q "^# CONFIG_${opt} is not set$" out/.config; then
+              sed -i "s/^# CONFIG_${opt} is not set$/CONFIG_${opt}=y/" out/.config
+              echo "::notice::${opt} включён этой веткой"
+            else
+              echo "CONFIG_${opt}=y" >> out/.config
+              echo "::notice::${opt} добавлен в конец конфига"
+            fi
+          done
+          for opt in NET_SCH_CODEL NET_SCH_FQ_CODEL NET_SCH_FQ NET_SCH_PIE; do
+            grep -q "^CONFIG_${opt}=y$" out/.config || { echo "::error::${opt} не =y"; exit 6; }
+          done
           echo "KERNEL_RELEASE=$(bash ./kmake.sh -s kernelrelease 2>/dev/null | tail -1)" >> "$GITHUB_ENV"
 
       - name: Pin vermagic
@@ -154,29 +180,40 @@ jobs:
             "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" \
             "$GITHUB_WORKSPACE/official_boot.img" --top 30 || true
 
-      - name: Verify equivalence with the official kernel
+      - name: Verify network schedulers are really linked
         run: |
           set -euxo pipefail
+          # Конфиг не доказательство - смотрим сам бинарник.
+          python3 scripts/check_qdisc.py \
+            "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" \
+            --require fq_codel --require fq
+
+      - name: Verify against the official kernel
+        run: |
+          set -euxo pipefail
+          # --require-equivalent здесь не годится: ветка несёт дельту
+          # конфига, поэтому набор строк обязан отличаться. Проверяем то,
+          # что критично для загрузки: build id clang и vermagic (иначе
+          # не загрузится стоковый модуль Wi-Fi qca_cld3_wlan.ko).
           python3 scripts/verify_reference.py \
             "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" \
-            "$GITHUB_WORKSPACE/official_boot.img" \
-            --require-equivalent
+            "$GITHUB_WORKSPACE/official_boot.img"
 
       - name: Repack boot
         if: always()
         run: |
           set -euxo pipefail
-          python3 scripts/repack_boot.py "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" "$GITHUB_WORKSPACE/official_boot.img" "$GITHUB_WORKSPACE/boot-guacamoleb-24-ref.img" avbtool.py
+          python3 scripts/repack_boot.py "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" "$GITHUB_WORKSPACE/official_boot.img" "$GITHUB_WORKSPACE/boot-guacamoleb-24-netsched.img" avbtool.py
           mkdir -p avbcheck
-          cp "$GITHUB_WORKSPACE"/boot-guacamoleb-24-ref.img avbcheck/boot.img
+          cp "$GITHUB_WORKSPACE"/boot-guacamoleb-24-netsched.img avbcheck/boot.img
           python3 avbtool.py verify_image --image avbcheck/boot.img
 
       - name: Upload boot.img
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: boot-guacamoleb-24-ref
-          path: boot-guacamoleb-24-ref.img
+          name: boot-guacamoleb-24-netsched
+          path: boot-guacamoleb-24-netsched.img
           if-no-files-found: error
           retention-days: 30
 
@@ -184,7 +221,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Image-24-ref-${{ github.sha }}
+          name: Image-24-netsched-${{ github.sha }}
           path: ${{ env.KERNEL_DIR }}/out/arch/arm64/boot/${{ env.KERNEL_IMAGE }}
           if-no-files-found: warn
           retention-days: 14
@@ -193,7 +230,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: config-and-log-24-ref-${{ github.sha }}
+          name: config-and-log-24-netsched-${{ github.sha }}
           path: |
             ${{ env.KERNEL_DIR }}/out/.config
             build.log
