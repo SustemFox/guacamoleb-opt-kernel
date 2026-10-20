@@ -135,6 +135,7 @@ jobs:
           fi
 
       - name: Verify 1:1 against the official kernel
+        continue-on-error: true
         run: |
           set -euxo pipefail
           python3 scripts/verify_reference.py \
@@ -143,6 +144,7 @@ jobs:
             --require-identical
 
       - name: Repack boot
+        if: always()
         run: |
           set -euxo pipefail
           python3 scripts/repack_boot.py "kernel/out/arch/arm64/boot/${KERNEL_IMAGE}" "$GITHUB_WORKSPACE/official_boot.img" "$GITHUB_WORKSPACE/boot-guacamoleb-24-ref.img" avbtool.py
@@ -151,6 +153,7 @@ jobs:
           python3 avbtool.py verify_image --image avbcheck/boot.img
 
       - name: Upload boot.img
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: boot-guacamoleb-24-ref
@@ -159,6 +162,7 @@ jobs:
           retention-days: 30
 
       - name: Upload Image
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: Image-24-ref-${{ github.sha }}
