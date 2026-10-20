@@ -12,11 +12,16 @@
 # загрузки - именно так устройство зависает до логотипа. Поэтому build id
 # берём из официального boot.img и ищем prebuilt ровно с таким же id.
 #
-# Порядок поиска:
-#   1) закреплённый tarball (CLANG_TARBALL), если задан и совпадает;
-#   2) ветка AOSP prebuilts: перебираем каталоги clang-r* от новых к старым,
-#      у каждого спрашиваем build id у его bin/clang;
-#   3) не нашли - падаем с внятным сообщением (никогда молча).
+# Где искать. Репозиторий prebuilts AOSP зеркалит несколько веток, и
+# актуальная - mirror-goog-main-llvm-toolchain-source: в ней лежат
+# clang-r584948b, clang-r596125, clang-r614150. Ветки вида
+# mirror-goog-llvm-rXXXXXX-release - ДРУГИЕ, более старые зеркала: они
+# обновляются реже и нужного prebuilt не содержат (проверено: r596125
+# там нет, последний коммит - февраль 2026).
+#
+# Банкер прямо называет ревизию LLVM ("based on r596125"), а prebuilt
+# называется так же (clang-r596125) - значит искать можно точно, без
+# перебора. Номер build'а проверяется запуском bin/clang --version.
 #
 # Использование:
 #   fetch_toolchain.sh <official-boot.img> <out-dir> [--list]
@@ -28,96 +33,99 @@ LIST_ONLY=0
 [ "${3:-}" = "--list" ] && LIST_ONLY=1
 
 REPO="${PREBUILTS_REPO:-https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86}"
-BRANCH="${PREBUILTS_BRANCH:-mirror-goog-llvm-r596125-release}"
+# Актуальная ветка - первой, потом всё, что задано окружением.
+BRANCHES="${PREBUILTS_BRANCH:-} mirror-goog-main-llvm-toolchain-source"
 SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
 
-WANT=$(python3 "$SCRIPTS/artifact_info.py" --clang-build-id "$BOOT" || true)
-if [ -z "$WANT" ]; then
-  echo "::error::не удалось прочитать clang build id из $BOOT" >&2
-  exit 1
-fi
-echo "::notice::официальное ядро собрано clang build id = $WANT"
+log() { echo "::notice::$*"; }
 
-# --- список кандидатов из ветки AOSP ---
+# --- build id и ревизия LLVM из официального образа ---
+WANT_ID=$("$SCRIPTS/artifact_info.py" --clang-build-id "$BOOT" || true)
+[ -n "$WANT_ID" ] || { echo "::error::не удалось прочитать clang build id из $BOOT" >&2; exit 1; }
+log "официальное ядро собрано clang build id = $WANT_ID"
+
+WANT_REV=$("$SCRIPTS/artifact_info.py" --llvm-rev "$BOOT" 2>/dev/null || true)
+log "тулчейн основан на LLVM $WANT_REV"
+
+# --- кандидаты по всем веткам, точное совпадение по ревизии - первым ---
 list_candidates() {
-  curl -s --compressed -m 60 \
-    "$REPO/+/refs/heads/$BRANCH/?format=JSON" 2>/dev/null \
-    | tail -c +6 \
-    | grep -oE '"name": "clang-r[0-9a-z]+"' \
-    | sed 's/.*"name": "//; s/"$//' \
-    | sort -V -r
+  local seen="" out="" b d
+  for b in $BRANCHES; do
+    [ -n "$b" ] || continue
+    case " $seen " in *" $b "*) continue ;; esac
+    seen="$seen $b"
+    out=$(curl -s --compressed -m 60 \
+      "$REPO/+/refs/heads/$b/?format=JSON" 2>/dev/null \
+      | tail -c +6 \
+      | grep -oE '"name": "clang-r[0-9a-z]+"' \
+      | sed 's/.*"name": "//; s/"$//' \
+      | sort -V -r)
+    [ -n "$out" ] || continue
+    if [ -n "$WANT_REV" ] && echo "$out" | grep -qx "clang-$WANT_REV"; then
+      echo "clang-$WANT_REV"
+      echo "$out" | grep -vx "clang-$WANT_REV"
+    else
+      echo "$out"
+    fi
+  done | awk '!seen[$0]++'
 }
 
-# --- build id конкретного prebuilt ---
 clang_build_id_of() {
-  local dir="$1" bin="$2"
-  [ -x "$bin/clang" ] || return 1
-  "$bin/clang" --version 2>/dev/null \
-    | sed -n 's/.*Android (\([0-9]*\),.*/\1/p' | head -1
+  local bin="$1"
+  [ -x "$bin" ] || return 1
+  "$bin" --version 2>/dev/null | sed -n 's/.*Android (\([0-9]*\),.*/\1/p' | head -1
+}
+
+branch_sha() {
+  curl -s --compressed -m 60 "$REPO/+log/refs/heads/$1?format=JSON&n=1" 2>/dev/null \
+    | tail -c +6 | grep -oE '"commit": "[0-9a-f]{40}"' | head -1 | cut -d'"' -f4
 }
 
 if [ "$LIST_ONLY" = "1" ]; then
-  echo "want build id: $WANT"
+  echo "want build id: $WANT_ID"
+  echo "want llvm rev: $WANT_REV"
   echo "candidates:"
   list_candidates | sed 's/^/  /'
   exit 0
 fi
 
 mkdir -p "$OUT"
-
-# --- 1) закреплённый tarball ---
-if [ -n "${CLANG_TARBALL:-}" ]; then
-  echo "::notice::пробую закреплённый CLANG_TARBALL"
-  tmp=$(mktemp -d)
-  if curl -L --fail --retry 3 --max-time 1200 "$CLANG_TARBALL" -o "$tmp/clang.tar.gz"; then
-    tar xzf "$tmp/clang.tar.gz" -C "$tmp"
-    found=$(find "$tmp" -maxdepth 3 -name clang -type f -path '*/bin/clang' | head -1 || true)
-    if [ -n "$found" ]; then
-      got=$(clang_build_id_of "$(dirname "$(dirname "$found")")" "$found" || true)
-      if [ "$got" = "$WANT" ]; then
-        rm -rf "$OUT/clang"; mkdir -p "$OUT/clang"
-        cp -a "$(dirname "$(dirname "$found")")/." "$OUT/clang/"
-        echo "::notice::совпало: закреплённый tarball, build id $got"
-        exit 0
-      fi
-      echo "::notice::закреплённый tarball даёт build id '${got:-?}', нужен $WANT"
-    fi
-  fi
-  rm -rf "$tmp"
-fi
-
-# --- 2) перебор ветки AOSP ---
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-echo "::notice::ищу prebuilt с build id $WANT в $BRANCH"
 
+# ищем каталог с точным именем в каждой ветке
 for dir in $(list_candidates); do
-  echo "::notice::кандидат: $dir"
-  url="$REPO/+archive/refs/heads/$BRANCH/$dir.tar.gz"
-  if ! curl -L --fail --retry 2 --max-time 1800 -s "$url" -o "$TMP/c.tar.gz"; then
-    echo "::notice::  не скачался, пропускаю"
-    continue
-  fi
-  rm -rf "$TMP/x"; mkdir -p "$TMP/x"
-  if ! tar xzf "$TMP/c.tar.gz" -C "$TMP/x" 2>/dev/null; then
-    echo "::notice::  не распаковался, пропускаю"
-    continue
-  fi
-  found=$(find "$TMP/x" -maxdepth 3 -name clang -type f -path '*/bin/clang' | head -1 || true)
-  [ -n "$found" ] || { echo "::notice::  нет bin/clang, пропускаю"; continue; }
-  got=$(clang_build_id_of "$(dirname "$(dirname "$found")")" "$found" || true)
-  if [ "$got" = "$WANT" ]; then
-    rm -rf "$OUT/clang"; mkdir -p "$OUT/clang"
-    cp -a "$(dirname "$(dirname "$found")")/." "$OUT/clang/"
-    echo "::notice::НАЙДЕНО: $dir, build id $got"
-    exit 0
-  fi
-  echo "::notice::  build id '${got:-?}' != $WANT, пропускаю"
+  for b in $BRANCHES; do
+    [ -n "$b" ] || continue
+    SHA=$(branch_sha "$b")
+    [ -n "$SHA" ] || continue
+    url="$REPO/+archive/$SHA/$dir.tar.gz"
+    log "кандидат: $dir (ветка $b @ ${SHA:0:12})"
+    if ! curl -L --fail --retry 2 --max-time 3600 -s "$url" -o "$TMP/c.tar.gz"; then
+      log "  не скачался, пропускаю"
+      continue
+    fi
+    rm -rf "$TMP/x"; mkdir -p "$TMP/x"
+    if ! tar xzf "$TMP/c.tar.gz" -C "$TMP/x" 2>/dev/null; then
+      log "  не распаковался, пропускаю"
+      continue
+    fi
+    found=$(find "$TMP/x" -maxdepth 3 -name clang -type f -path '*/bin/clang' | head -1 || true)
+    [ -n "$found" ] || { log "  нет bin/clang, пропускаю"; continue; }
+    chmod +x "$found" 2>/dev/null || true
+    got=$(clang_build_id_of "$found" || true)
+    if [ "$got" = "$WANT_ID" ]; then
+      rm -rf "$OUT/clang"; mkdir -p "$OUT/clang"
+      cp -a "$(dirname "$(dirname "$found")")/." "$OUT/clang/"
+      log "НАЙДЕНО: $dir (ветка $b), build id $got"
+      exit 0
+    fi
+    log "  build id '${got:-?}' != $WANT_ID, пропускаю"
+  done
 done
 
-echo "::error::prebuilt с clang build id $WANT не найден." >&2
-echo "::error::ветка: $BRANCH, репозиторий: $REPO" >&2
-echo "::error::доступные каталоги:" >&2
+echo "::error::prebuilt с clang build id $WANT_ID не найден." >&2
+echo "::error::репозиторий: $REPO" >&2
+echo "::error::проверенные каталоги:" >&2
 list_candidates | sed 's/^/::error::  /' >&2
-echo "::error::официальный образ собран более свежим тулчейном, чем доступный в этой ветке." >&2
 exit 1
