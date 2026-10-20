@@ -83,6 +83,25 @@ echo kyber > /sys/block/sda/queue/scheduler
 cannot be the build-time default - it has to be selected through sysfs
 (init.rc or a Magisk module).
 
+## Toolchain
+
+The build id and LLVM revision are read from the official kernel banner
+(`Android (15071444, …, based on r596125)`), and the matching prebuilt is
+resolved by `scripts/fetch_toolchain.sh` — not pinned by URL. Two measured
+details matter:
+
+* the needed prebuilt lives in `mirror-goog-main-llvm-toolchain-source`, not in
+  the branch named after the revision (`mirror-goog-llvm-r596125-release` is
+  from February 2026 and tops out at `clang-r584948b`);
+* the directory is rewritten in place, so its tip holds build `15682573` while
+  the official kernel was built with `15071444` (commit `9b144bef`, 24 March).
+  The resolver walks the branch history for `from build <id>`, confirms it via
+  `BUILD_INFO`, and downloads the archive from that commit.
+
+The prebuilt binaries are x86_64, so verification uses `BUILD_INFO` rather than
+`clang --version`. Full rationale is in the `24` branch README.
+
+## Branches
 ## Branches
 
 | branch | what it is |
