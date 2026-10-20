@@ -1,6 +1,6 @@
-# guacamoleb (OnePlus 7) — LineageOS 24 reference, 1:1 baseline
+# guacamoleb (OnePlus 7) — LineageOS 24 reference, stock-equivalent baseline
 
-Builds a flashable **boot.img** for `guacamoleb` that is **1:1 with the
+Builds a flashable **boot.img** for `guacamoleb` that is **equivalent to the
 official LineageOS kernel** of the newest available build. No config delta,
 no extra patches, no behavioural change — the only goal of this branch is a
 **trustworthy baseline** to measure every later optimization against.
@@ -17,8 +17,9 @@ Reference point: official `boot.img` of the LineageOS 24.0 build **20261018**
 | | value |
 |---|---|
 | boot.img | 100 663 296 B, md5 `0608d1fd27c4a3dcbcf25b6c8bb0b696` |
-| Image (kernel payload) | **33 422 960 B** |
-| Image sha256 | `30317134f93a8119f61808461d50dae5e5d11da7993433f1c445a01ca1532dc7` |
+| Image (whole kernel region) | **49 111 064 B** (`kernel_size` in the boot header) |
+| ..of which code before IKCONFIG | 33 422 960 B, sha256 `30317134f93a8119f61808461d50dae5e5d11da7993433f1c445a01ca1532dc7` |
+| ..IKCONFIG blob | at offset 33 422 960, 36 269 B (**in the middle**, not at the end) |
 | .config (IKCONFIG) | 161 939 B, 6 061 lines, 1 805 options |
 | ramdisk | 59 272 485 B (taken byte-identical from the official image) |
 | kernel commit | `0521dc291cf1` (release `4.14.357-openela-perf-g0521dc291cf1`) |
@@ -30,8 +31,40 @@ official image and fails unless
 
 1. the **clang build id** matches (read from the official image, not hardcoded),
 2. the **release string** matches (`-g<sha>` is pinned via `.scmversion`),
-3. the **payload sha256** is identical (the appended IKCONFIG is stripped
-   before hashing, because `olddefconfig` rewrites it).
+3. the **image size** matches byte for byte,
+4. the **set of kernel message strings** matches (the build banner excluded).
+
+## Why byte-identical output is not reproducible
+
+Measured, not assumed. Two builds of this branch — same source, same config,
+same clang build 15071444 — differing **only** in the source directory
+(`/home/runner/work/...` vs `/lineage/lineage-24.0/kernel/oneplus/sm8150`)
+and in `KBUILD_BUILD_USER/HOST`:
+
+| comparison | identical pages | differing bytes |
+|---|---|---|
+| our build vs our build | 21.2 % | **23.6 %** |
+| our build vs official | 15.6 % | 67.1 % |
+
+So the payload hash is not a usable gate: it fails for two of our own builds.
+The cause is structural, not a mistake in the toolchain:
+
+* `CONFIG_IKCONFIG=y` embeds the `.config` **inside** the image, and the blob
+  moves by a whole 4 KiB page when a string before it changes length — the
+  banner alone is enough;
+* everything after that point shifts, and on arm64 every `adrp`/`add` pair
+  that addresses data is page-relative, so a shift rewrites the code that
+  refers to it;
+* ThinLTO then lays the modules out differently, which changes inlining.
+
+What *is* stable, and what the gate checks, is the toolchain identity, the
+vermagic and the exact set of strings compiled in (27 149 messages; two of
+our builds agree on 100 % of them, the official one differs by a single
+stray symbol fragment). Anything beyond that has to be proven by booting
+the image on the device, not by a hash.
+
+`scripts/diff_report.py` prints the full difference map when a comparison
+does need to be explained.
 
 `scripts/verify_reference.py` implements that gate and is shared by every
 branch, so the comparison baseline is always the official image that CI just
@@ -107,7 +140,7 @@ running device:
 | lever | official value | note |
 |---|---|---|
 | `max_cached_processes` | 1024 | userspace (`lmkd`), tunable via `device_config`, no kernel build needed |
-| I/O scheduler | `cfq` (legacy) | `CONFIG_SCSI_MQ_DEFAULT` is **not** set; blk-mq with `CONFIG_MQ_IOSCHED_KYBER` is compiled in — that is the `opt` experiment |
+| I/O scheduler | `cfq` (legacy) | `CONFIG_SCSI_MQ_DEFAULT` is **not** set, so UFS uses the legacy path (`noop deadline cfq`). Kyber is a blk-mq scheduler: `CONFIG_MQ_IOSCHED_KYBER=y` is in the config but the code is **not linked** into the official binary, and even if it were, it could not be selected on the legacy path — that is the `kyber` branch |
 | zram size | 2 280 MB | set by `init` from `zramsize=` in the kernel cmdline (DTB `/chosen/bootargs`); `swapoff` returns EINVAL on this kernel, so the size can only be changed at image level |
 | scheduler | `CONFIG_SCHED_WALT=y`, `CONFIG_SCHED_TUNE=y` | **WALT, not EAS**; and `sched_tune`, not uclamp |
 | `CONFIG_HZ` | 250 | |

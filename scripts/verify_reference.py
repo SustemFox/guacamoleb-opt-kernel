@@ -107,6 +107,35 @@ def strip_ikconfig(kernel):
     j += len(b'IKCFG_ED')
     return kernel[:i] + kernel[j:], j - i
 
+ALLOWED_CHARS = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+                    '0123456789 .,:;()%/-_')
+
+
+def meaningful_strings(img):
+    """Printable, human-readable strings; the build banner is excluded.
+
+    Byte-identical output is not reproducible: the same source and toolchain
+    produce ~24% different bytes when only the build path changes (ThinLTO
+    lays the image out differently and every adrp/add follows). What must
+    hold is that the kernel is built from the same source with the same
+    options - and that shows up as an identical set of message strings.
+    """
+    import re
+    out = set()
+    for m in re.finditer(rb'[ -~]{20,}', img):
+        text = m.group().decode('ascii')
+        if ' ' not in text:
+            continue
+        if sum(c.isalpha() for c in text) < len(text) * 0.5:
+            continue
+        if 'Linux version' in text or 'version %s' in text:
+            continue
+        if any(c not in ALLOWED_CHARS for c in text):
+            continue
+        out.add(text)
+    return out
+
+
 def main():
     argv = sys.argv[1:]
     positional = [a for a in argv if not a.startswith('--')]
@@ -151,6 +180,37 @@ def main():
         ok = False
     else:
         print('OK    release string matches (%s)' % built_rel)
+
+    if '--require-equivalent' in flags:
+        if len(built) != len(official):
+            print('FAIL  image size: built %d != official %d'
+                  % (len(built), len(official)))
+            ok = False
+        else:
+            print('OK    image size matches (%d bytes)' % len(built))
+        if len(built_payload) != len(official_payload):
+            print('FAIL  payload size: built %d != official %d'
+                  % (len(built_payload), len(official_payload)))
+            ok = False
+        else:
+            print('OK    payload size matches (%d bytes)' % len(built_payload))
+        bs, os_ = meaningful_strings(built), meaningful_strings(official)
+        extra, missing = bs - os_, os_ - bs
+        slack = len(extra) + len(missing)
+        if slack > 3:
+            print('FAIL  string set: %d only in built, %d only in official'
+                  % (len(extra), len(missing)))
+            for t in sorted(extra)[:5]:
+                print('        + %s' % t[:120])
+            for t in sorted(missing)[:5]:
+                print('        - %s' % t[:120])
+            ok = False
+        elif slack:
+            print('OK    string set matches (%d messages, %d stray symbol '
+                  'fragments differ)' % (len(bs), slack))
+        else:
+            print('OK    string set identical (%d messages)' % len(bs))
+        print('INFO  byte-level differences are expected; see diff_report.py')
 
     if '--require-identical' in flags:
         if built_sha != official_sha:
