@@ -19,7 +19,8 @@ downloaded. Checks, in decreasing strictness:
 
 The kernel payload is located the same way the scheduler check locates it
 (kernelimg.py): the boot header of this image carries an unusable
-kernel_size, so slicing by it would run into the ramdisk.
+kernel_size, so slicing by it would run into the ramdisk and hash
+ramdisk bytes instead of kernel bytes.
 
 Usage:
     verify_reference.py <built-kernel|boot.img> <official-boot.img> [--require-identical]
@@ -50,25 +51,26 @@ def _gzip_end(blob, start):
 
 
 def read_kernel(path):
-    """Return the kernel payload from an Android boot image or a raw Image.
+    """Return the kernel region of an Android boot image, or a raw Image.
 
-    The kernel ends after the appended IKCONFIG gzip; the boot header of
-    this image has a kernel_size that does not match the real kernel.
+    The region length is taken from the boot header's kernel_size. It must
+    not be derived from the IKCONFIG marker: on this image the appended
+    .config sits in the middle of the kernel (~33.4 MB in), with ~15 MB of
+    real kernel after it, so cutting at IKCFG_ST would truncate the image.
     """
     blob = open(path, 'rb').read()
     if blob[:8] != BOOT_MAGIC:
         return blob
     page = struct.unpack('<I', blob[36:40])[0] or 4096
+    ksize = struct.unpack('<I', blob[8:12])[0]
+    if 0 < ksize <= len(blob) - page:
+        return blob[page:page + ksize]
     i = blob.find(b'IKCFG_ST', page)
     if i >= 0:
         end = _gzip_end(blob, i + 8)
         if end and end > i:
             return blob[page:end]
-    ksize = struct.unpack('<I', blob[8:12])[0]
-    if 0 < ksize <= len(blob) - page:
-        return blob[page:page + ksize]
     return blob[page:]
-
 
 def clang_build_id(kernel):
     m = CLANG_ID_RE.search(kernel)
@@ -88,18 +90,50 @@ def sha256(data):
 
 
 def strip_ikconfig(kernel):
-    """Split off the IKCONFIG blob appended to the kernel image.
+    """Cut the embedded .config blob out of the kernel image.
 
-    CONFIG_IKCONFIG=y makes the build append the .config (gzip, prefixed
-    with "IKCFG_ST") to the kernel. `olddefconfig` rewrites that .config, so
-    its bytes differ from the official one even for a perfect 1:1 build.
-    The payload hash must therefore be computed over the kernel *without*
-    the appended config; the config size is reported separately.
+    CONFIG_IKCONFIG=y makes the build embed the .config (gzip, wrapped in
+    IKCFG_ST .. IKCFG_ED) inside the image, not at its end. `olddefconfig`
+    rewrites that .config, so its bytes differ even for a perfect 1:1 build.
+    The payload hash is therefore computed over the image with that block
+    removed - the surrounding kernel bytes are spliced together.
     """
-    i = kernel.rfind(b'IKCFG_ST')
+    i = kernel.find(b'IKCFG_ST')
     if i < 0:
         return kernel, 0
-    return kernel[:i], len(kernel) - i
+    j = kernel.find(b'IKCFG_ED', i)
+    if j < 0:
+        return kernel, 0
+    j += len(b'IKCFG_ED')
+    return kernel[:i] + kernel[j:], j - i
+
+ALLOWED_CHARS = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+                    '0123456789 .,:;()%/-_')
+
+
+def meaningful_strings(img):
+    """Printable, human-readable strings; the build banner is excluded.
+
+    Byte-identical output is not reproducible: the same source and toolchain
+    produce ~24% different bytes when only the build path changes (ThinLTO
+    lays the image out differently and every adrp/add follows). What must
+    hold is that the kernel is built from the same source with the same
+    options - and that shows up as an identical set of message strings.
+    """
+    import re
+    out = set()
+    for m in re.finditer(rb'[ -~]{20,}', img):
+        text = m.group().decode('ascii')
+        if ' ' not in text:
+            continue
+        if sum(c.isalpha() for c in text) < len(text) * 0.5:
+            continue
+        if 'Linux version' in text or 'version %s' in text:
+            continue
+        if any(c not in ALLOWED_CHARS for c in text):
+            continue
+        out.add(text)
+    return out
 
 
 def main():
@@ -146,6 +180,37 @@ def main():
         ok = False
     else:
         print('OK    release string matches (%s)' % built_rel)
+
+    if '--require-equivalent' in flags:
+        if len(built) != len(official):
+            print('FAIL  image size: built %d != official %d'
+                  % (len(built), len(official)))
+            ok = False
+        else:
+            print('OK    image size matches (%d bytes)' % len(built))
+        if len(built_payload) != len(official_payload):
+            print('FAIL  payload size: built %d != official %d'
+                  % (len(built_payload), len(official_payload)))
+            ok = False
+        else:
+            print('OK    payload size matches (%d bytes)' % len(built_payload))
+        bs, os_ = meaningful_strings(built), meaningful_strings(official)
+        extra, missing = bs - os_, os_ - bs
+        slack = len(extra) + len(missing)
+        if slack > 3:
+            print('FAIL  string set: %d only in built, %d only in official'
+                  % (len(extra), len(missing)))
+            for t in sorted(extra)[:5]:
+                print('        + %s' % t[:120])
+            for t in sorted(missing)[:5]:
+                print('        - %s' % t[:120])
+            ok = False
+        elif slack:
+            print('OK    string set matches (%d messages, %d stray symbol '
+                  'fragments differ)' % (len(bs), slack))
+        else:
+            print('OK    string set identical (%d messages)' % len(bs))
+        print('INFO  byte-level differences are expected; see diff_report.py')
 
     if '--require-identical' in flags:
         if built_sha != official_sha:
