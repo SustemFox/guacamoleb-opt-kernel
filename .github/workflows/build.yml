@@ -134,6 +134,14 @@ jobs:
             exit "$rc"
           fi
 
+      - name: Diff report vs official
+        if: always()
+        run: |
+          set -uxo pipefail
+          python3 scripts/diff_report.py \
+            "kernel/out/arch/arm64/boot/${KERNEL_IMAGE}" \
+            "$GITHUB_WORKSPACE/official_boot.img" --top 30 || true
+
       - name: Verify 1:1 against the official kernel
         continue-on-error: true
         run: |
@@ -166,7 +174,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Image-24-ref-${{ github.sha }}
-          path: kernel/out/arch/arm64/boot/${KERNEL_IMAGE}
+          path: kernel/out/arch/arm64/boot/${{ env.KERNEL_IMAGE }}
           if-no-files-found: warn
           retention-days: 14
 

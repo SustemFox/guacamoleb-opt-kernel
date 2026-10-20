@@ -51,25 +51,26 @@ def _gzip_end(blob, start):
 
 
 def read_kernel(path):
-    """Return the kernel payload from an Android boot image or a raw Image.
+    """Return the kernel region of an Android boot image, or a raw Image.
 
-    The kernel ends after the appended IKCONFIG gzip; the boot header of
-    this image has a kernel_size that does not match the real kernel.
+    The region length is taken from the boot header's kernel_size. It must
+    not be derived from the IKCONFIG marker: on this image the appended
+    .config sits in the middle of the kernel (~33.4 MB in), with ~15 MB of
+    real kernel after it, so cutting at IKCFG_ST would truncate the image.
     """
     blob = open(path, 'rb').read()
     if blob[:8] != BOOT_MAGIC:
         return blob
     page = struct.unpack('<I', blob[36:40])[0] or 4096
+    ksize = struct.unpack('<I', blob[8:12])[0]
+    if 0 < ksize <= len(blob) - page:
+        return blob[page:page + ksize]
     i = blob.find(b'IKCFG_ST', page)
     if i >= 0:
         end = _gzip_end(blob, i + 8)
         if end and end > i:
             return blob[page:end]
-    ksize = struct.unpack('<I', blob[8:12])[0]
-    if 0 < ksize <= len(blob) - page:
-        return blob[page:page + ksize]
     return blob[page:]
-
 
 def clang_build_id(kernel):
     m = CLANG_ID_RE.search(kernel)
@@ -89,19 +90,22 @@ def sha256(data):
 
 
 def strip_ikconfig(kernel):
-    """Split off the IKCONFIG blob appended to the kernel image.
+    """Cut the embedded .config blob out of the kernel image.
 
-    CONFIG_IKCONFIG=y makes the build append the .config (gzip, prefixed
-    with "IKCFG_ST") to the kernel. `olddefconfig` rewrites that .config, so
-    its bytes differ from the official one even for a perfect 1:1 build.
-    The payload hash must therefore be computed over the kernel *without*
-    the appended config; the config size is reported separately.
+    CONFIG_IKCONFIG=y makes the build embed the .config (gzip, wrapped in
+    IKCFG_ST .. IKCFG_ED) inside the image, not at its end. `olddefconfig`
+    rewrites that .config, so its bytes differ even for a perfect 1:1 build.
+    The payload hash is therefore computed over the image with that block
+    removed - the surrounding kernel bytes are spliced together.
     """
-    i = kernel.rfind(b'IKCFG_ST')
+    i = kernel.find(b'IKCFG_ST')
     if i < 0:
         return kernel, 0
-    return kernel[:i], len(kernel) - i
-
+    j = kernel.find(b'IKCFG_ED', i)
+    if j < 0:
+        return kernel, 0
+    j += len(b'IKCFG_ED')
+    return kernel[:i] + kernel[j:], j - i
 
 def main():
     argv = sys.argv[1:]
