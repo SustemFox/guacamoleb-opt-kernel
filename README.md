@@ -1,76 +1,108 @@
-# guacamoleb (OnePlus 7) — LineageOS 23.2 kernel, optimization baseline
+# guacamoleb (OnePlus 7) — LineageOS 24 reference, 1:1 baseline
 
-Builds a flashable **boot.img** for `guacamoleb` from the **LineageOS 23.2**
-kernel source with **no root solution**. This repository is the workspace for
-**kernel performance / efficiency work** on top of the verified stock build
-pipeline.
+Builds a flashable **boot.img** for `guacamoleb` that is **1:1 with the
+official LineageOS kernel** of the newest available build. No config delta,
+no extra patches, no behavioural change — the only goal of this branch is a
+**trustworthy baseline** to measure every later optimization against.
 
-Derived from `SustemFox/guacamoleb-stock-kernel` (branch `pi/llvm-baseline`),
-which was confirmed to build and boot on the device without workarounds.
+This is the `24` line: the ROM generation that is actually installed on the
+device. The older `main` / `opt` / `stocklike` branches stay on the 23.2
+toolchain and are left untouched as the historical reference.
 
-## Why a separate repo
+## What "1:1" means here, measured
 
-A fork was not possible (github does not fork a repository into its own
-owner account, and no organization is available), so the verified pipeline was
-copied here. The upstream `guacamoleb-stock-kernel` stays untouched as the
-known-good reference.
+Reference point: official `boot.img` of the LineageOS 24.0 build **20261018**
+(`https://download.lineageos.org/api/v2/devices/guacamoleb/builds`).
 
-## What this builds today
-
-The current `main` is the **unmodified reference build**:
-
-| aspect | how |
+| | value |
 |---|---|
-| source | `LineageOS/android_kernel_oneplus_sm8150`, pinned commit `0521dc291cf1` |
-| configuration | the **exact official `.config`** from the shipped `boot.img` (IKCONFIG, unmodified) |
-| toolchain | `clang-r563880c` (build id `14054515`), **pure LLVM** (`LLVM=1 LLVM_IAS=1`) |
-| ramdisk + DTB | taken from the official `boot.img`, byte-identical |
-| vermagic | pinned to the official release string via `.scmversion` |
-| AVB | footer re-signed with `avbtool` and verified |
+| boot.img | 100 663 296 B, md5 `0608d1fd27c4a3dcbcf25b6c8bb0b696` |
+| Image (kernel payload) | **33 422 960 B** |
+| Image sha256 | `30317134f93a8119f61808461d50dae5e5d11da7993433f1c445a01ca1532dc7` |
+| .config (IKCONFIG) | 161 939 B, 6 061 lines, 1 805 options |
+| ramdisk | 59 272 485 B (taken byte-identical from the official image) |
+| kernel commit | `0521dc291cf1` (release `4.14.357-openela-perf-g0521dc291cf1`) |
+| clang | `Android (15071444, +pgo, +bolt, +lto, +mlgo, based on r596125) clang 22.0.2` / LLD 22.0.2 |
+| device config | `/proc/config.gz` on the phone is **byte-identical** to the official IKCONFIG (diff: 0 lines) |
 
-CI asserts release string and clang build id match the official kernel, and
-prints the kernel size delta.
+**Acceptance criterion:** the CI gate compares the built kernel against the
+official image and fails unless
 
-## Optimization work (planned)
+1. the **clang build id** matches (read from the official image, not hardcoded),
+2. the **release string** matches (`-g<sha>` is pinned via `.scmversion`),
+3. the **payload sha256** is identical (the appended IKCONFIG is stripped
+   before hashing, because `olddefconfig` rewrites it).
 
-Changes belong on a branch, one lever per branch, each measured against `main`:
+`scripts/verify_reference.py` implements that gate and is shared by every
+branch, so the comparison baseline is always the official image that CI just
+downloaded — never a stale local copy.
 
-- **Scheduler / frequency**: EAS/HMP tuning, governor (`schedutil`), latency-nice
-- **I/O and mm**: readahead, f2fs/ext4 mount options, writeback, zram, PSI
-- **Network**: TCP congestion control (bbr/cubic), buffers
-- **Memory**: LMK, `min_free_kbytes`, vmalloc tuning
-- **Build**: `-O3` vs `-O2`, dropping unused drivers/subsystems (smaller image,
-  faster init), `CONFIG_HZ`
-- **Idle / battery**: cpuidle states, suspend tuning
+## Toolchain: why it is resolved, not pinned
 
-Every change must keep: boot, Wi-Fi (`qca_cld3_wlan` vermagic), vendor modules
-(`CONFIG_MODVERSIONS=y`) and Android 16 compatibility.
+The official kernel states its own toolchain build id in the banner
+(`Android (15071444, …)`). With LTO + ThinLTO + Shadow Call Stack a different
+clang changes early-boot codegen — that is exactly how a device hangs before
+the logo. So the build id is read from the official image and the matching
+prebuilt is looked up in the AOSP prebuilts tree
+(`scripts/fetch_toolchain.sh`). If no prebuilt matches, the build **fails
+loudly** and lists the candidates it found — it never falls back silently.
 
-## Artifacts
+> Current state: the public `mirror-goog-llvm-r596125-release` branch
+> exposes `clang-r584948b` (build 14863223) as its newest prebuilt, while the
+> official 24.0 kernel was built with build **15071444**. The reference build
+> therefore cannot complete until AOSP publishes that prebuilt. The branch is
+> ready and will pick it up automatically once it appears.
 
-* `boot-guacamoleb-opt.img` — flashable boot image
-* `Image-opt-<sha>.zip` — raw kernel
-* `config-and-log-opt-<sha>.zip` — `.config` + full build log
+## Branches
 
-## Safe test (no flashing)
+| branch | what it is |
+|---|---|
+| `24` | **this branch** — 1:1 reference against the official 24.0 kernel |
+| `main` | 23.2 reference build (unmodified official config) |
+| `opt` | 23.2 + one lever: `CONFIG_SCSI_MQ_DEFAULT=y` (blk-mq UFS path) |
+| `stocklike` | 23.2, replicate of a known-green run |
+
+## How the 24 and 23.2 lines relate
+
+* The kernel tree is **the same commit** (`0521dc291cf1`) on both lines —
+  `lineage-24.0` was `lineage-23.2` plus one commit
+  (`9f007fac`, *power: oplus: Move OEM power supply props to oplus_chg
+  class*), and that commit landed **after** the 2026-10-18 build, so the
+  newest official image still uses `0521dc291cf1`.
+* What **did** change between the lines is the **toolchain**:
+  23.2 was built with `clang-r563880c` (build 14054515, clang 21.0.0),
+  24.0 with r596125 (build 15071444, clang 22.0.2). That is the single
+  reason the `24` branch exists as a separate line.
+
+## Later work (not in this branch)
+
+The device's official `.config` is the baseline. Candidates measured on the
+running device:
+
+| lever | official value | note |
+|---|---|---|
+| `max_cached_processes` | 1024 | userspace (`lmkd`), tunable via `device_config`, no kernel build needed |
+| I/O scheduler | `cfq` (legacy) | `CONFIG_SCSI_MQ_DEFAULT` is **not** set; blk-mq with `CONFIG_MQ_IOSCHED_KYBER` is compiled in — that is the `opt` experiment |
+| zram size | 2 280 MB | set by `init` from `zramsize=` in the kernel cmdline (DTB `/chosen/bootargs`); `swapoff` returns EINVAL on this kernel, so the size can only be changed at image level |
+| scheduler | `CONFIG_SCHED_WALT=y`, `CONFIG_SCHED_TUNE=y` | **WALT, not EAS**; and `sched_tune`, not uclamp |
+| `CONFIG_HZ` | 250 | |
+| BTF | not built | `CONFIG_DEBUG_INFO` is off; BTF needs `DEBUG_INFO` + `DEBUG_INFO_BTF` and `pahole` ≥ 1.16. The boot partition is filled to the byte by the official image (kernel 33.4 MB + ramdisk 59.3 MB), so debug info does not fit without shrinking the ramdisk — that makes it a separate, non-1:1 branch |
+| ftrace | `CONFIG_FUNCTION_TRACER` off | needed for tracing/eBPF work |
+
+## Install
 
 ```bash
-fastboot boot boot-guacamoleb-opt.img
+fastboot flash boot boot-guacamoleb-24-ref.img
 ```
 
-`fastboot boot` loads the image into RAM without writing the boot partition.
-
-## Install (requires PC)
-
-```bash
-# A/B device, active slot
-fastboot flash boot boot-guacamoleb-opt.img
-```
-
-> This image contains **no root**. Flashing it over a device that relies on
-> APatch removes root; keep the APatch-patched boot image for rollback.
-
-## Notes
-
-* **Re-flash after every OTA** (LineageOS OTA writes the inactive slot).
-* **SELinux** stays enforcing.
+> This image contains **no root** and **no vendor changes**. Flashing it
+> over a device that relies on APatch removes root — keep the APatch-patched
+> boot image for rollback.
+>
+> The stock vendor WLAN module (`qca_cld3_wlan.ko`) is built with
+> `CONFIG_MODVERSIONS=y` and only loads against the exact vermagic, which is
+> why `pin_vermagic.py` is part of the build.
+>
+> Re-flash after every OTA (LineageOS OTA writes the inactive slot).
+>
+> SELinux stays enforcing.
