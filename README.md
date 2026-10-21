@@ -34,6 +34,33 @@ official image and fails unless
 3. the **image size** matches byte for byte,
 4. the **set of kernel message strings** matches (the build banner excluded).
 
+## The toolchain invocation matters more than anything else
+
+The official build recipe lives in the kernel tree itself
+(`build.config.aarch64`):
+
+```
+CROSS_COMPILE=aarch64-linux-gnu-
+```
+
+That single line decides the clang **target** (`--target=aarch64-linux-gnu-`)
+and, when `LLVM_IAS` is not set, also the **assembler** and the **header
+search path** (`-no-integrated-as --prefix=<gcc dir>`), so clang ends up
+using GCC 4.9's headers instead of its own. Using the GCC prebuilt with full
+paths (`CROSS_COMPILE=.../aarch64-linux-android-`) changes the target and
+the headers, and with it the whole generated code.
+
+Measured against the official image, same source and same config:
+
+| invocation | bytes differing from the official Image | differing in `.text` |
+|---|---|---|
+| GCC paths (`aarch64-linux-android-`) | 67.1 % | ~94 % |
+| **pure LLVM** (`LLVM=1 LLVM_IAS=1`, `aarch64-linux-gnu-`) | **24.6 %** | **2.7 %** |
+
+The remaining 24.6 % is data, not code: `.rela.dyn` and the relocation
+tables, which follow the code. The build banner now matches the official
+one byte for byte (`root@32db8f4874f2`, build 15071444, same LLD commit).
+
 ## Why byte-identical output is not reproducible
 
 Measured, not assumed. Two builds of this branch — same source, same config,
