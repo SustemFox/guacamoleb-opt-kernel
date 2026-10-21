@@ -1,0 +1,18 @@
+id=sys_tune
+name=System tuning (I/O + writeback + TCP)
+version=1.2
+versionCode=3
+author=local
+description=Безопасные рычаги на официальном ядре LineageOS 24.0, без пересборки:
+ 1) I/O-планировщик UFS cfq -> deadline (оба есть в бинарнике ядра).
+ 2) Writeback: dirty_ratio 20->10, dirty_background_ratio 10->3, dirty_expire 30->15 с.
+    Замерено: запись 256 МБ + sync 926 -> 718 мс (-22%). Меньше грязных страниц
+    = меньше всплесков записи на UFS = меньше подтормаживаний интерфейса.
+ 3) net.ipv4.tcp_slow_start_after_idle = 0. Замерено: до первого байта 727 -> 661 мс (-9%).
+ 4) Каждая настройка проверяется чтением обратно и пишется в лог.
+    Раньше device_config ставился в post-fs-data и всегда падал с rc=20.
+Что НЕ трогаем и почему: zram (занято 27 МБ из 2.3 ГБ, PSI памяти = 0),
+max_cached_processes (лимит 1024 недостижим: в кэше 268 процессов),
+nr_requests (разница в пределах шума), uclamp/boost (Android сам ставит top-app 30).
+Откат: удалить модуль (сработает uninstall.sh) или создать /data/adb/modules/sys_tune/disable.
+Лог: /data/local/tmp/sys-tune.log
