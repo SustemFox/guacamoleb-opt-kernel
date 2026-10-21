@@ -19,7 +19,7 @@ Usage: fix_perf_workflow.py <file.yml> <branch-name>
 import sys
 
 OLD_NAME = "name: guacamoleb 24 reference (stock-equivalent)"
-NEW_NAME = "name: guacamoleb kernel ${{ github.ref_name }}"
+NEW_NAME = "name: guacamoleb kernel __BRANCH__"
 
 REPL = [
     # 1. триггер: ветка должна слушать саму себя

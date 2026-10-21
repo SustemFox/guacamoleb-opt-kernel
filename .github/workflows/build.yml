@@ -1,4 +1,4 @@
-name: guacamoleb kernel ${{ github.ref_name }}
+name: guacamoleb kernel perf-full
 
 on:
   push:
