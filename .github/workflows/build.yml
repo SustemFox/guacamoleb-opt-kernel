@@ -2,7 +2,7 @@ name: guacamoleb 24 reference (stock-equivalent)
 
 on:
   push:
-    branches: [24]
+    branches: [bbr]
   workflow_dispatch:
 
 concurrency:
@@ -108,7 +108,7 @@ jobs:
           "$CLANG_DIR/bin/clang" --version | head -1
           echo "CLANG_DIR=$CLANG_DIR" >> "$GITHUB_ENV"
 
-      - name: Config (official, no delta)
+      - name: Config (official + BBR delta)
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -uxo pipefail
@@ -123,6 +123,22 @@ jobs:
             tail -80 /tmp/olddefconfig.log | while IFS= read -r l; do echo "::error::olddefconfig: $l"; done
             exit 2
           }
+          # --- дельта этой ветки: BBR вместо cubic ---
+          # В стоке только CONFIG_TCP_CONG_CUBIC, а CONFIG_TCP_CONG_ADVANCED
+          # выключен - значит, сменить алгоритм заполнения канала нельзя.
+          # На канале с большим RTT (мобильная сеть, измеренные 1.2 с) cubic
+          # работает плохо: он заполняет буфер и теряет пакеты. BBR держит
+          # скорость при потерях, это ровно его случай.
+          if ! grep -q '^CONFIG_TCP_CONG_ADVANCED=y$' out/.config; then
+            sed -i 's/^# CONFIG_TCP_CONG_ADVANCED is not set$/CONFIG_TCP_CONG_ADVANCED=y/' out/.config
+          fi
+          if ! grep -q '^CONFIG_TCP_CONG_BBR=y$' out/.config; then
+            sed -i 's/^# CONFIG_TCP_CONG_BBR is not set$/CONFIG_TCP_CONG_BBR=y/' out/.config
+            echo 'CONFIG_TCP_CONG_BBR=y' >> out/.config
+          fi
+          sed -i 's/^CONFIG_DEFAULT_TCP_CONG=.*/CONFIG_DEFAULT_TCP_CONG="bbr"/' out/.config
+          grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"$' out/.config || { echo "::error::default tcp cong не bbr"; exit 8; }
+          grep -q '^CONFIG_TCP_CONG_BBR=y$' out/.config || { echo "::error::BBR не включён"; exit 8; }
           echo "KERNEL_RELEASE=$(bash ./kmake.sh -s kernelrelease 2>/dev/null | tail -1)" >> "$GITHUB_ENV"
 
       - name: Pin vermagic
@@ -166,17 +182,17 @@ jobs:
         if: always()
         run: |
           set -euxo pipefail
-          python3 scripts/repack_boot.py "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" "$GITHUB_WORKSPACE/official_boot.img" "$GITHUB_WORKSPACE/boot-guacamoleb-24-ref.img" avbtool.py
+          python3 scripts/repack_boot.py "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" "$GITHUB_WORKSPACE/official_boot.img" "$GITHUB_WORKSPACE/boot-guacamoleb-24-bbr.img" avbtool.py
           mkdir -p avbcheck
-          cp "$GITHUB_WORKSPACE"/boot-guacamoleb-24-ref.img avbcheck/boot.img
+          cp "$GITHUB_WORKSPACE"/boot-guacamoleb-24-bbr.img avbcheck/boot.img
           python3 avbtool.py verify_image --image avbcheck/boot.img
 
       - name: Upload boot.img
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: boot-guacamoleb-24-ref
-          path: boot-guacamoleb-24-ref.img
+          name: boot-guacamoleb-24-bbr
+          path: boot-guacamoleb-24-bbr.img
           if-no-files-found: error
           retention-days: 30
 
@@ -184,7 +200,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Image-24-ref-${{ github.sha }}
+          name: Image-24-bbr-${{ github.sha }}
           path: ${{ env.KERNEL_DIR }}/out/arch/arm64/boot/${{ env.KERNEL_IMAGE }}
           if-no-files-found: warn
           retention-days: 14
@@ -193,7 +209,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: config-and-log-24-ref-${{ github.sha }}
+          name: config-and-log-24-bbr-${{ github.sha }}
           path: |
             ${{ env.KERNEL_DIR }}/out/.config
             build.log
