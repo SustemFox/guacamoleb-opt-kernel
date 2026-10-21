@@ -1,0 +1,17 @@
+--- a/techpack/Kbuild
++++ b/techpack/Kbuild
+@@ -12,7 +12,13 @@
+ TECHPACK?=y
+ 
+ techpack-dirs := $(shell find $(srctree)/techpack -maxdepth 1 -mindepth 1 -type d -not -name ".*")
+-obj-${TECHPACK} += stub/ $(addsuffix /,$(subst $(srctree)/techpack/,,$(techpack-dirs)))
++# The order of the subdirectories must not depend on the readdir order of
++# the filesystem: it defines the order of the initcalls in the final image.
++# The official build has audio, audio-extend, data - keep it that way and
++# append anything new at the end.
++techpack-order := audio audio-extend data
++techpack-new-dirs := $(filter-out $(techpack-order),$(subst $(srctree)/techpack/,,$(techpack-dirs)))
++obj-${TECHPACK} += stub/ $(addsuffix /,$(techpack-order) $(techpack-new-dirs))
+ 
+ techpack-header-dirs := $(shell find $(srctree)/techpack -maxdepth 1 -mindepth 1 -type d -not -name ".*")
+ header-${TECHPACK} += $(addsuffix /include/uapi/,$(subst $(srctree)/techpack/,,$(techpack-header-dirs)))
