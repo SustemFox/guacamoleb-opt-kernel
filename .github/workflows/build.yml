@@ -135,6 +135,9 @@ jobs:
           # получали mtime момента checkout, и это расходилось с официальным.
           find include arch -name '*.h' -print0 |
             xargs -0 touch -h -d "$KBUILD_BUILD_TIMESTAMP"
+          # cpio -p копирует владельца из исходника, а checkout принадлежит
+          # runner (uid 1001). В стоке все файлы внутри kheaders - root:0.
+          sudo chown -R 0:0 include arch
 
       - name: Pin vermagic
         working-directory: ${{ env.KERNEL_DIR }}
