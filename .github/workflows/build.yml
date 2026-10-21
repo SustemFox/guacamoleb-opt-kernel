@@ -1,8 +1,8 @@
-name: guacamoleb 24 reference (stock-equivalent)
+name: guacamoleb kernel (${{ github.ref_name }})
 
 on:
   push:
-    branches: [24]
+    branches: [perf-scs]
   workflow_dispatch:
 
 concurrency:
@@ -128,12 +128,16 @@ jobs:
           python3 "$GITHUB_WORKSPACE/scripts/extract_config.py" "$GITHUB_WORKSPACE/official_boot.img" out/.config || true
           echo "::notice::outconfig_size=$(stat -c%s out/.config 2>/dev/null || echo MISSING)"
           test -s out/.config || { echo "::error::extract_config produced no out/.config"; exit 3; }
-          # Эталонная линия: конфиг официальный, без единой правки.
+          # Дельта производительности поверх официального конфига:
+          # SCS, отладочные опции, SELinux develop, размер CMA.
+          python3 "$GITHUB_WORKSPACE/scripts/enable_perf.py" out/.config $PERF_FLAGS
           cp "$GITHUB_WORKSPACE/scripts/kmake.sh" .
           bash ./kmake.sh olddefconfig > /tmp/olddefconfig.log 2>&1 || {
             tail -80 /tmp/olddefconfig.log | while IFS= read -r l; do echo "::error::olddefconfig: $l"; done
             exit 2
           }
+          echo "::notice::effective perf options:"
+          grep -E '^(# )?CONFIG_(SHADOW_CALL_STACK|DEBUG_LIST|DEBUG_KERNEL|DEBUG_BUGVERBOSE|DEBUG_ALIGN_RODATA|SECURITY_SELINUX_DEVELOP|CMA_SIZE_MBYTES)' out/.config || true
           echo "KERNEL_RELEASE=$(bash ./kmake.sh -s kernelrelease 2>/dev/null | tail -1)" >> "$GITHUB_ENV"
 
       - name: Prepare source timestamps for kheaders
@@ -182,6 +186,8 @@ jobs:
             "$GITHUB_WORKSPACE/official_boot.img" --top 30 || true
 
       - name: Verify equivalence with the official kernel
+        # У perf-варианта совпадение со стоком невозможно по определению.
+        if: ${{ env.PERF_FLAGS == '' }}
         run: |
           set -euxo pipefail
           python3 scripts/verify_reference.py \
@@ -193,17 +199,17 @@ jobs:
         if: always()
         run: |
           set -euxo pipefail
-          python3 scripts/repack_boot.py "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" "$GITHUB_WORKSPACE/official_boot.img" "$GITHUB_WORKSPACE/boot-guacamoleb-24-ref.img" avbtool.py
+          python3 scripts/repack_boot.py "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" "$GITHUB_WORKSPACE/official_boot.img" "$GITHUB_WORKSPACE/boot-${{ github.ref_name }}.img" avbtool.py
           mkdir -p avbcheck
-          cp "$GITHUB_WORKSPACE"/boot-guacamoleb-24-ref.img avbcheck/boot.img
+          cp "$GITHUB_WORKSPACE"/boot-${{ github.ref_name }}.img avbcheck/boot.img
           python3 avbtool.py verify_image --image avbcheck/boot.img
 
       - name: Upload boot.img
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: boot-guacamoleb-24-ref
-          path: boot-guacamoleb-24-ref.img
+          name: boot-${{ github.ref_name }}
+          path: boot-${{ github.ref_name }}.img
           if-no-files-found: error
           retention-days: 30
 
@@ -211,7 +217,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Image-24-ref-${{ github.sha }}
+          name: Image-${{ github.ref_name }}-${{ github.sha }}
           path: ${{ env.KERNEL_DIR }}/out/arch/arm64/boot/${{ env.KERNEL_IMAGE }}
           if-no-files-found: warn
           retention-days: 14
