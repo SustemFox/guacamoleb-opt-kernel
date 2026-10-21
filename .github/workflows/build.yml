@@ -20,6 +20,13 @@ env:
   GCC64_BRANCH: lineage-19.1
   GCC32_REPO: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9
   GCC32_BRANCH: lineage-19.1
+  KERNEL_DIR: /lineage/lineage-24.0/kernel/oneplus/sm8150
+  # Баннер официального ядра: "#0 SMP PREEMPT Sun Oct 18 01:17:55 UTC 2026"
+  # и "root@32db8f4874f2". Эти четыре переменные воспроизводят его байт в байт.
+  KBUILD_BUILD_USER: root
+  KBUILD_BUILD_HOST: 32db8f4874f2
+  KBUILD_BUILD_VERSION: "0"
+  KBUILD_BUILD_TIMESTAMP: "Sun Oct 18 01:17:55 UTC 2026"
   AVBTOOL_URL: https://android.googlesource.com/platform/external/avb/+/refs/heads/main/avbtool.py?format=TEXT
 
 jobs:
@@ -97,7 +104,7 @@ jobs:
           echo "CLANG_DIR=$CLANG_DIR" >> "$GITHUB_ENV"
 
       - name: Config (official + kyber delta)
-        working-directory: kernel
+        working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -uxo pipefail
           export PATH="$CLANG_DIR/bin:$GCC64_DIR/bin:$GCC32_DIR/bin:$PATH"
@@ -125,20 +132,28 @@ jobs:
           }
           echo "KERNEL_RELEASE=$(bash ./kmake.sh -s kernelrelease 2>/dev/null | tail -1)" >> "$GITHUB_ENV"
 
+      - name: Prepare source timestamps for kheaders
+        run: |
+          set -euxo pipefail
+          cd "$KERNEL_DIR"
+          find include arch -name '*.h' -print0 |
+            xargs -0 touch -h -d "$KBUILD_BUILD_TIMESTAMP"
+          sudo chown -R 0:0 include arch
+
       - name: Pin vermagic
-        working-directory: kernel
+        working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -euxo pipefail
           python3 "$GITHUB_WORKSPACE/scripts/pin_vermagic.py" . "$GITHUB_WORKSPACE/official_boot.img" out/.config
           echo "KERNEL_RELEASE=$(bash ./kmake.sh -s kernelrelease | tail -1)" >> "$GITHUB_ENV"
 
       - name: Build kernel
-        working-directory: kernel
+        working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -uxo pipefail
           export PATH="$CLANG_DIR/bin:$GCC64_DIR/bin:$GCC32_DIR/bin:$PATH"
           cp "$GITHUB_WORKSPACE/scripts/kmake.sh" .
-          bash ./kmake.sh -j"$(nproc --all)" "$KERNEL_IMAGE" modules > "$GITHUB_WORKSPACE/build.log" 2>&1
+          sudo -E env "PATH=$PATH" bash -c 'umask 022; exec bash ./kmake.sh -j"$(nproc --all)" "$KERNEL_IMAGE" modules' > "$GITHUB_WORKSPACE/build.log" 2>&1
           rc=$?
           tail -40 "$GITHUB_WORKSPACE/build.log"
           if [ "$rc" -ne 0 ]; then
@@ -154,7 +169,7 @@ jobs:
           # CONFIG_MQ_IOSCHED_KYBER=y while containing no kyber code. Check the
           # binary itself, and fail the build if kyber did not make it in.
           python3 scripts/check_schedulers.py \
-            "kernel/out/arch/arm64/boot/${KERNEL_IMAGE}" \
+            "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" \
             --require kyber
 
       - name: Verify against the official kernel
@@ -164,14 +179,14 @@ jobs:
           # payload hash must differ. build id and release string still must
           # match, otherwise the stock vendor WLAN module will not load.
           python3 scripts/verify_reference.py \
-            "kernel/out/arch/arm64/boot/${KERNEL_IMAGE}" \
+            "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" \
             "$GITHUB_WORKSPACE/official_boot.img"
 
       - name: Repack boot
         if: always()
         run: |
           set -euxo pipefail
-          python3 scripts/repack_boot.py "kernel/out/arch/arm64/boot/${KERNEL_IMAGE}" "$GITHUB_WORKSPACE/official_boot.img" "$GITHUB_WORKSPACE/boot-guacamoleb-24-kyber.img" avbtool.py
+          python3 scripts/repack_boot.py "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" "$GITHUB_WORKSPACE/official_boot.img" "$GITHUB_WORKSPACE/boot-guacamoleb-24-kyber.img" avbtool.py
           mkdir -p avbcheck
           cp "$GITHUB_WORKSPACE"/boot-guacamoleb-24-kyber.img avbcheck/boot.img
           python3 avbtool.py verify_image --image avbcheck/boot.img
@@ -190,7 +205,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Image-24-kyber-${{ github.sha }}
-          path: kernel/out/arch/arm64/boot/${KERNEL_IMAGE}
+          path: $KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}
           if-no-files-found: warn
           retention-days: 14
 
