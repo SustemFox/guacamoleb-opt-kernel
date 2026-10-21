@@ -29,7 +29,7 @@ env:
   KBUILD_BUILD_VERSION: "0"
   KBUILD_BUILD_TIMESTAMP: "Sun Oct 18 01:17:55 UTC 2026"
   # Какие опции снять (см. scripts/enable_perf.py). Пусто - ничего не трогаем.
-  PERF_FLAGS: "--no-scs"
+  PERF_FLAGS: "--no-scs --no-debug --selinux-strict --cma 64"
 
 jobs:
   build:
