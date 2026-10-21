@@ -151,6 +151,14 @@ jobs:
           done
           echo "KERNEL_RELEASE=$(bash ./kmake.sh -s kernelrelease 2>/dev/null | tail -1)" >> "$GITHUB_ENV"
 
+      - name: Prepare source timestamps for kheaders
+        run: |
+          set -euxo pipefail
+          cd "$KERNEL_DIR"
+          find include arch -name '*.h' -print0 |
+            xargs -0 touch -h -d "$KBUILD_BUILD_TIMESTAMP"
+          sudo chown -R 0:0 include arch
+
       - name: Pin vermagic
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -164,7 +172,7 @@ jobs:
           set -uxo pipefail
           export PATH="$CLANG_DIR/bin:$GCC64_DIR/bin:$GCC32_DIR/bin:$PATH"
           cp "$GITHUB_WORKSPACE/scripts/kmake.sh" .
-          bash ./kmake.sh -j"$(nproc --all)" "$KERNEL_IMAGE" modules > "$GITHUB_WORKSPACE/build.log" 2>&1
+          sudo -E env "PATH=$PATH" bash -c 'umask 022; exec bash ./kmake.sh -j"$(nproc --all)" "$KERNEL_IMAGE" modules' > "$GITHUB_WORKSPACE/build.log" 2>&1
           rc=$?
           tail -40 "$GITHUB_WORKSPACE/build.log"
           if [ "$rc" -ne 0 ]; then
