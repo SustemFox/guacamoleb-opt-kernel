@@ -2,7 +2,7 @@
 """
 enable_bbr.py - включить BBR как алгоритм управления заполнением канала.
 
-Version: 1.2 - BBR вместо cubic.
+Version: 1.3 - BBR вместо cubic, плюс fq как pacing-планировщик.
 
 Зачем: в стоковом конфиге CONFIG_TCP_CONG_ADVANCED выключен, поэтому
 доступен только cubic, и сменить алгоритм штатно нельзя. На канале с
@@ -13,6 +13,11 @@ Version: 1.2 - BBR вместо cubic.
 опций DEFAULT_*. Поэтому одного CONFIG_TCP_CONG_BBR=y мало: нужен ещё
 CONFIG_DEFAULT_BBR=y, а остальные DEFAULT_* надо снять, иначе choice
 останется на cubic.
+
+Плюс fq: в справке самой опции BBR в этом дереве сказано "It requires
+the fq (Fair Queue) pacing packet scheduler". Без sch_fq BBR работать не
+может, поэтому собираем fq и делаем его планировщиком по умолчанию
+(NET_SCH_DEFAULT + DEFAULT_FQ) - именно так BBR и рекомендуют настраивать.
 
 Почему не olddefconfig: включение TCP_CONG_ADVANCED добавляет сразу 17
 новых опций TCP_CONG_*, у которых нет значения по умолчанию, и Kconfig
@@ -25,7 +30,7 @@ Usage:
 import re
 import sys
 
-VERSION = "1.2"
+VERSION = "1.3"
 
 KEEP_ON = ("TCP_CONG_BBR", "TCP_CONG_CUBIC")
 
@@ -52,12 +57,19 @@ def main():
     # широкая: под неё попадают DEFAULT_SECURITY_SELINUX, DEFAULT_MMAP_MIN_ADDR,
     # DEFAULT_USE_ENERGY_AWARE, DEFAULT_HOSTNAME, DEFAULT_IOSCHED - их снос
     # ломал конфиг (в версии 1.1).
-    algo_opts = set(options) | set(defaults) | {'DEFAULT_TCP_CONG'}
+    algo_opts = set(options) | set(defaults) | {
+        'DEFAULT_TCP_CONG', 'DEFAULT_NET_SCH', 'NET_SCH_DEFAULT',
+        'NET_SCH_FQ', 'DEFAULT_FQ'}
     lines = [l for l in lines
              if not re.match(r'^(# )?CONFIG_(\w+)=', l) or
              re.match(r'^(# )?CONFIG_(\w+)=', l).group(2) not in algo_opts]
 
-    out = ['CONFIG_TCP_CONG_ADVANCED=y']
+    # fq обязателен для BBR (pacing) и должен быть планировщиком по умолчанию
+    out = ['CONFIG_TCP_CONG_ADVANCED=y',
+           'CONFIG_NET_SCH_FQ=y',
+           'CONFIG_NET_SCH_DEFAULT=y',
+           'CONFIG_DEFAULT_FQ=y',
+           'CONFIG_DEFAULT_NET_SCH="fq"']
     for opt in options:
         if opt in KEEP_ON:
             out.append('CONFIG_%s=y' % opt)
