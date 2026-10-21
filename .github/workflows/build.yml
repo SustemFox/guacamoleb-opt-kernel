@@ -80,6 +80,12 @@ jobs:
           git log --oneline -1
           git config user.name ci
           git config user.email ci@localhost
+          for patch in "$GITHUB_WORKSPACE"/patches/*.patch; do
+            [ -e "$patch" ] || continue
+            git -C "$KERNEL_DIR" apply "$patch" || {
+              echo "::error::не применился патч $patch"; exit 7; }
+            echo "::notice::применён патч $(basename "$patch")"
+          done
 
       - name: Cache toolchains
         uses: actions/cache@v4
