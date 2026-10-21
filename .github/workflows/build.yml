@@ -70,8 +70,12 @@ jobs:
       - name: Fetch kernel source
         run: |
           set -euxo pipefail
-          git clone --depth=1 "$KERNEL_REPO" kernel
-          cd kernel
+          # Официальная сборка шла из /lineage/lineage-24.0/kernel/oneplus/sm8150:
+          # этот путь зашит в строки образа, и от него зависит и раскладка.
+          sudo mkdir -p "$(dirname "$KERNEL_DIR")"
+          sudo chown -R "$(id -u):$(id -g)" /lineage
+          git clone --depth=1 "$KERNEL_REPO" "$KERNEL_DIR"
+          cd "$KERNEL_DIR"
           git fetch --depth=1 origin "$KERNEL_COMMIT"
           git checkout --detach FETCH_HEAD
           git log --oneline -1
