@@ -119,7 +119,11 @@ jobs:
           test -s out/.config || { echo "::error::extract_config produced no out/.config"; exit 3; }
           # Эталонная линия: конфиг официальный, без единой правки.
           cp "$GITHUB_WORKSPACE/scripts/kmake.sh" .
-          bash ./kmake.sh olddefconfig > /tmp/olddefconfig.log 2>&1 || {
+          # olddefconfig не справляется: включение TCP_CONG_ADVANCED добавляет
+          # новые опции (BIC, Reno, ...), у которых нет значения по умолчанию,
+          # и он прерывается на вопросе. oldconfig с пустым ответом берёт для
+          # них значения по умолчанию (обычно N).
+          yes '' | bash ./kmake.sh oldconfig > /tmp/olddefconfig.log 2>&1 || {
             tail -80 /tmp/olddefconfig.log | while IFS= read -r l; do echo "::error::olddefconfig: $l"; done
             exit 2
           }
