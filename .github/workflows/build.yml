@@ -125,6 +125,17 @@ jobs:
           }
           echo "KERNEL_RELEASE=$(bash ./kmake.sh -s kernelrelease 2>/dev/null | tail -1)" >> "$GITHUB_ENV"
 
+      - name: Prepare source timestamps for kheaders
+        run: |
+          set -euxo pipefail
+          cd "$KERNEL_DIR"
+          # kheaders.tar.xz встраивается в .rodata образа. В официальной
+          # сборке у файлов внутри: владелец root:root, права 644 и mtime,
+          # совпадающий с меткой времени сборки. Собранные у нас заголовки
+          # получали mtime момента checkout, и это расходилось с официальным.
+          find include arch -name '*.h' -print0 |
+            xargs -0 touch -h -d "$KBUILD_BUILD_TIMESTAMP"
+
       - name: Pin vermagic
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -138,7 +149,9 @@ jobs:
           set -uxo pipefail
           export PATH="$CLANG_DIR/bin:$GCC64_DIR/bin:$GCC32_DIR/bin:$PATH"
           cp "$GITHUB_WORKSPACE/scripts/kmake.sh" .
-          bash ./kmake.sh -j"$(nproc --all)" "$KERNEL_IMAGE" modules > "$GITHUB_WORKSPACE/build.log" 2>&1
+          # Сборка от root: cpio -p сохраняет владельца файлов только под
+          # root, иначе в kheaders.tar.xz попадает uid 1001 (runner).
+          sudo -E env "PATH=$PATH" bash -c 'umask 022; exec bash ./kmake.sh -j"$(nproc --all)" "$KERNEL_IMAGE" modules' > "$GITHUB_WORKSPACE/build.log" 2>&1
           rc=$?
           tail -40 "$GITHUB_WORKSPACE/build.log"
           if [ "$rc" -ne 0 ]; then
