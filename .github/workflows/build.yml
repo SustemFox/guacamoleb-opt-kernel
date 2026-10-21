@@ -117,6 +117,8 @@ jobs:
           python3 "$GITHUB_WORKSPACE/scripts/extract_config.py" "$GITHUB_WORKSPACE/official_boot.img" out/.config || true
           echo "::notice::outconfig_size=$(stat -c%s out/.config 2>/dev/null || echo MISSING)"
           test -s out/.config || { echo "::error::extract_config produced no out/.config"; exit 3; }
+          python3 "$GITHUB_WORKSPACE/scripts/extract_config.py" \
+            "$GITHUB_WORKSPACE/official_boot.img" "$GITHUB_WORKSPACE/official.config" || true
           # Эталонная линия: конфиг официальный, без единой правки.
           cp "$GITHUB_WORKSPACE/scripts/kmake.sh" .
           # olddefconfig не справляется: включение TCP_CONG_ADVANCED добавляет
@@ -141,6 +143,12 @@ jobs:
             tail -80 /tmp/olddefconfig.log | while IFS= read -r l; do echo "::error::olddefconfig: $l"; done
             exit 2
           }
+          # Печатаем различие конфига с официальным - до прошивки.
+          # В версии enable_bbr 1.1 маска CONFIG_DEFAULT_* снесла ещё и
+          # DEFAULT_SECURITY_SELINUX, DEFAULT_MMAP_MIN_ADDR и другие - ядро
+          # перестало загружаться. Поэтому дельта должна быть видна сразу.
+          python3 "$GITHUB_WORKSPACE/scripts/config_delta.py" out/.config \
+            "$GITHUB_WORKSPACE/official.config" || true
           echo "KERNEL_RELEASE=$(bash ./kmake.sh -s kernelrelease 2>/dev/null | tail -1)" >> "$GITHUB_ENV"
 
       - name: Pin vermagic

@@ -2,7 +2,7 @@
 """
 enable_bbr.py - включить BBR как алгоритм управления заполнением канала.
 
-Version: 1.1 - BBR вместо cubic.
+Version: 1.2 - BBR вместо cubic.
 
 Зачем: в стоковом конфиге CONFIG_TCP_CONG_ADVANCED выключен, поэтому
 доступен только cubic, и сменить алгоритм штатно нельзя. На канале с
@@ -25,7 +25,7 @@ Usage:
 import re
 import sys
 
-VERSION = "1.1"
+VERSION = "1.2"
 
 KEEP_ON = ("TCP_CONG_BBR", "TCP_CONG_CUBIC")
 
@@ -44,13 +44,19 @@ def main():
 
     lines = open(cfg_path).read().splitlines()
     # убираем прежние упоминания, чтобы не было дублей
-    lines = [l for l in lines
-             if not re.match(r'^(# )?CONFIG_(TCP_CONG_\w+|DEFAULT_TCP_CONG)=', l)
-             and l != 'CONFIG_TCP_CONG_ADVANCED=y'
-             and not re.match(r'^# CONFIG_TCP_CONG_ADVANCED is not set$', l)
-             and not re.match(r'^(# )?CONFIG_DEFAULT_\w+=', l)]
-
     defaults = re.findall(r'^\tconfig (DEFAULT_\w+)', kconfig, re.M)
+    if not defaults:
+        sys.exit("не найдено ни одной опции DEFAULT_* в %s" % kconfig_path)
+
+    # Чистим только опции выбора алгоритма. Маска CONFIG_DEFAULT_* слишком
+    # широкая: под неё попадают DEFAULT_SECURITY_SELINUX, DEFAULT_MMAP_MIN_ADDR,
+    # DEFAULT_USE_ENERGY_AWARE, DEFAULT_HOSTNAME, DEFAULT_IOSCHED - их снос
+    # ломал конфиг (в версии 1.1).
+    algo_opts = set(options) | set(defaults) | {'DEFAULT_TCP_CONG'}
+    lines = [l for l in lines
+             if not re.match(r'^(# )?CONFIG_(\w+)=', l) or
+             re.match(r'^(# )?CONFIG_(\w+)=', l).group(2) not in algo_opts]
+
     out = ['CONFIG_TCP_CONG_ADVANCED=y']
     for opt in options:
         if opt in KEEP_ON:
