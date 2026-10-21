@@ -141,6 +141,11 @@ jobs:
           # Планировщик по умолчанию НЕ меняем (остаётся pfifo_fast): в ядре
           # CONFIG_NET_SCH_DEFAULT не выставлен, поэтому поведение системы
           # не меняется, пока мы не включим qdisc вручную через tc или sysctl.
+          # Дефолтный планировщик - в ядре: иначе новые интерфейсы (и
+          # дочерние очереди у mq-интерфейсов, как wlan0) получают
+          # pfifo_fast, а повесить fq_codel на mq через tc нельзя (ENOENT).
+          python3 "$GITHUB_WORKSPACE/scripts/enable_qdisc.py" out/.config \
+            "$KERNEL_DIR/net/sched/Kconfig" --fq_codel
           for opt in NET_SCH_CODEL NET_SCH_FQ_CODEL NET_SCH_FQ NET_SCH_PIE; do
             if grep -q "^CONFIG_${opt}=y$" out/.config; then
               echo "::notice::${opt} уже включён"
@@ -152,6 +157,11 @@ jobs:
               echo "::notice::${opt} добавлен в конец конфига"
             fi
           done
+          # Дефолтный планировщик - в ядре: иначе новые интерфейсы (и
+          # дочерние очереди у mq-интерфейсов, как wlan0) получают
+          # pfifo_fast, а повесить fq_codel на mq через tc нельзя (ENOENT).
+          python3 "$GITHUB_WORKSPACE/scripts/enable_qdisc.py" out/.config \
+            "$KERNEL_DIR/net/sched/Kconfig" --fq_codel
           for opt in NET_SCH_CODEL NET_SCH_FQ_CODEL NET_SCH_FQ NET_SCH_PIE; do
             grep -q "^CONFIG_${opt}=y$" out/.config || { echo "::error::${opt} не =y"; exit 6; }
           done
