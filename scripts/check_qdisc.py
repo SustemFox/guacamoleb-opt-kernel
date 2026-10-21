@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+Version: 1.0 - проверка сетевых планировщиков в бинарнике
 check_qdisc.py - which network schedulers (qdiscs) are really in the kernel?
 
 Same lesson as with the I/O schedulers: the config is not the truth, the

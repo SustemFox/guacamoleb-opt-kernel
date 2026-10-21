@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+Version: 1.0 - карта различий с официальным образом
 diff_report.py - where exactly does a built Image differ from the official one?
 
 The 1:1 gate can only say "hashes differ". This tool says *where* and *how*:

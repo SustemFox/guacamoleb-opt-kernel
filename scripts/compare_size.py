@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+Version: 1.0 - сравнение размеров образа
 Print kernel sizes and the delta between an official boot image and a custom
 kernel image.
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+Version: 1.0 - загрузка официального boot.img
 Fetch the official LineageOS boot.img for guacamoleb.
 
 Usage:

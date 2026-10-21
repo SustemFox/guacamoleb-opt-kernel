@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+Version: 1.1 - режим --llvm-rev, выбор build id из истории ветки
 Inspect a kernel image or an Android boot image and print metadata.
 
 Used by CI as a gate: the custom kernel must have been produced by the same

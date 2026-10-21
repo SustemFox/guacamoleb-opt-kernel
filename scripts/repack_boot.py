@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+Version: 1.0 - пересборка boot-образа с новым ядром и переподписью AVB
 Repack an Android boot image (header v0-v2) with a new kernel, preserving the
 ramdisk, DTB and AVB signing.
 

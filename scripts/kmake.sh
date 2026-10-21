@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # KNOWN-GOOD toolchain wrapper (same invocation as the CI run that produced a booting stock kernel).
+# version: 1.1  (pure LLVM: LLVM=1 LLVM_IAS=1, --target=aarch64-linux-gnu-)
 set -euo pipefail
 
 : "${CLANG_DIR:?CLANG_DIR not set}"

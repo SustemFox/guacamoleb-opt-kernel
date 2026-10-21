@@ -39,6 +39,7 @@
 #
 # Использование:
 #   fetch_toolchain.sh <official-boot.img> <out-dir> [--list]
+# version: 1.1  (BUILD_INFO - необязательная проверка, ветка mirror-goog-main-llvm-toolchain-source)
 set -euo pipefail
 
 BOOT="${1:?official boot.img}"

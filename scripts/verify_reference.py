@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+Version: 1.1 - образ читается по kernel_size, конфиг вырезается из середины, критерий - эквивалентность
 verify_reference.py - 1:1 gate between a built kernel and the official one.
 
 Used by every branch of this repository so the tooling stays identical and

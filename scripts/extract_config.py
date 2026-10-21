@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+Version: 1.0 - извлечение .config из официального образа
 Extract the embedded kernel configuration (IKCONFIG) from the kernel inside an
 Android boot image.
 

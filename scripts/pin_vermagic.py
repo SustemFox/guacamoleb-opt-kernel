@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+Version: 1.0 - фиксация release-строки по официальному образу
 Pin the kernel's localversion so its vermagic matches the official
 LineageOS kernel — required for the stock vendor WLAN module to load.
 
