@@ -123,7 +123,9 @@ jobs:
           # новые опции (BIC, Reno, ...), у которых нет значения по умолчанию,
           # и он прерывается на вопросе. oldconfig с пустым ответом берёт для
           # них значения по умолчанию (обычно N).
-          yes '' | bash ./kmake.sh oldconfig > /tmp/olddefconfig.log 2>&1 || {
+          # stdin закрыт - Kconfig берёт значения по умолчанию для новых опций.
+          # Через `yes ''` нельзя: под pipefail убитый SIGPIPE ломает весь пайп.
+          bash ./kmake.sh oldconfig < /dev/null > /tmp/olddefconfig.log 2>&1 || {
             tail -80 /tmp/olddefconfig.log | while IFS= read -r l; do echo "::error::olddefconfig: $l"; done
             exit 2
           }
