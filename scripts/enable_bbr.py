@@ -2,12 +2,17 @@
 """
 enable_bbr.py - включить BBR как алгоритм управления заполнением канала.
 
-Version: 1.0 - BBR вместо cubic.
+Version: 1.1 - BBR вместо cubic.
 
 Зачем: в стоковом конфиге CONFIG_TCP_CONG_ADVANCED выключен, поэтому
 доступен только cubic, и сменить алгоритм штатно нельзя. На канале с
 большой задержкой (мобильная сеть, измеренные 1.2 с) cubic работает плохо:
 он заполняет буфер и теряет пакеты. BBR держит скорость при потерях.
+
+Внимание: DEFAULT_TCP_CONG - это не свободная строка, а choice из булевых
+опций DEFAULT_*. Поэтому одного CONFIG_TCP_CONG_BBR=y мало: нужен ещё
+CONFIG_DEFAULT_BBR=y, а остальные DEFAULT_* надо снять, иначе choice
+останется на cubic.
 
 Почему не olddefconfig: включение TCP_CONG_ADVANCED добавляет сразу 17
 новых опций TCP_CONG_*, у которых нет значения по умолчанию, и Kconfig
@@ -20,7 +25,7 @@ Usage:
 import re
 import sys
 
-VERSION = "1.0"
+VERSION = "1.1"
 
 KEEP_ON = ("TCP_CONG_BBR", "TCP_CONG_CUBIC")
 
@@ -42,11 +47,18 @@ def main():
     lines = [l for l in lines
              if not re.match(r'^(# )?CONFIG_(TCP_CONG_\w+|DEFAULT_TCP_CONG)=', l)
              and l != 'CONFIG_TCP_CONG_ADVANCED=y'
-             and not re.match(r'^# CONFIG_TCP_CONG_ADVANCED is not set$', l)]
+             and not re.match(r'^# CONFIG_TCP_CONG_ADVANCED is not set$', l)
+             and not re.match(r'^(# )?CONFIG_DEFAULT_\w+=', l)]
 
+    defaults = re.findall(r'^\tconfig (DEFAULT_\w+)', kconfig, re.M)
     out = ['CONFIG_TCP_CONG_ADVANCED=y']
     for opt in options:
         if opt in KEEP_ON:
+            out.append('CONFIG_%s=y' % opt)
+        else:
+            out.append('# CONFIG_%s is not set' % opt)
+    for opt in defaults:
+        if opt == 'DEFAULT_BBR' and want_bbr:
             out.append('CONFIG_%s=y' % opt)
         else:
             out.append('# CONFIG_%s is not set' % opt)
