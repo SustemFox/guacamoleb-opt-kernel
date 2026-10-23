@@ -18,4 +18,15 @@ for d in sda sdb sdc sde; do
     esac
     set_read "$p" cfq "io-sched $d"
 done
+set_read /proc/sys/kernel/sched_wakeup_granularity_ns 2000000 "sched_wakeup_granularity_ns"
+set_read /proc/sys/kernel/sched_migration_cost_ns 500000 "sched_migration_cost_ns"
+set_read /proc/sys/kernel/sched_child_runs_first 0 "sched_child_runs_first"
+set_read /proc/sys/kernel/sched_schedstats 1 "sched_schedstats"
+set_read /proc/sys/kernel/perf_cpu_time_max_percent 25 "perf_cpu_time_max_percent"
+set_read /proc/sys/vm/stat_interval 1 "vm.stat_interval"
+for d in sda sdb sdc sde; do
+    p=/sys/block/$d/queue
+    [ -e "$p/iostats" ] && set_read "$p/iostats" 1 "queue/iostats $d"
+    [ -e "$p/nr_requests" ] && set_read "$p/nr_requests" 128 "queue/nr_requests $d"
+done
 device_config delete activity_manager max_cached_processes >/dev/null 2>&1

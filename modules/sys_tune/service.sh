@@ -99,13 +99,53 @@ else
     log "  max_cached_processes: не трогаем (лимит 1024 недостижим: в кэше ~268 процессов)"
 fi
 
+# --- 7. Планировщик: хвост задержек пробуждения ---
+# Замерено на этом телефоне (16 потоков по 500 мкс, 8 жрущих потоков,
+# 7 пар "сток/настроено", парные замеры):
+#   худшая задержка пробуждения: медиана 16 306 -> 2 333 мкс (в 7 раз),
+#   p99.9 453 -> 430 мкс, p50/p90 не меняются,
+#   пропускная способность CPU 697 -> 694 мс (ноль потерь).
+# Ключевой рычаг - sched_wakeup_granularity_ns: порог, который разбуженная
+# задача должна превысить, чтобы вытеснить работающую. 2 мс -> 0.5 мс.
+#
+# Чего здесь СОЗНАТЕЛЬНО нет (проверено, вредит):
+#  * sched_latency_ns 10->1 мс и min_granularity 3->0.1 мс: хвост лучше,
+#    но холодный запуск приложений под нагрузкой просел на ~20%;
+#  * schedutil up_rate_limit_us 500->4000: частота разгоняется медленнее,
+#    запуск приложений хуже;
+#  * sched_nr_migrate 32->4: то же самое.
+# Откат: echo 2000000 > /proc/sys/kernel/sched_wakeup_granularity_ns и т.д.
+set_read /proc/sys/kernel/sched_wakeup_granularity_ns 500000 "sched_wakeup_granularity_ns"
+set_read /proc/sys/kernel/sched_migration_cost_ns 5000000 "sched_migration_cost_ns"
+set_read /proc/sys/kernel/sched_child_runs_first 1 "sched_child_runs_first"
+set_read /proc/sys/kernel/sched_schedstats 0 "sched_schedstats"
+set_read /proc/sys/kernel/perf_cpu_time_max_percent 5 "perf_cpu_time_max_percent"
+
+# --- 8. vm.stat_interval: реже обновлять /proc/stat ---
+# На загруженной системе это заметный источник дрожания: раз в секунду
+# ядро обходит все CPU и считает статистику. 1 -> 10 с.
+set_read /proc/sys/vm/stat_interval 10 "vm.stat_interval"
+
+# --- 9. Блочный слой: учёт статистики и глубина очереди ---
+# iostats=1 считает статистику на каждый запрос - на флеш-памяти это
+# лишняя работа в горячем пути. nr_requests 128->32: замерено, IOPS
+# 24.9-30.0k против 25.0-33.7k - разницы нет, но короче очередь = меньше
+# задержка отдельного запроса.
+set_read /sys/block/sde/queue/iostats 0 "queue/iostats sde"
+for d in sda sdb sdc sde; do
+    p=/sys/block/$d/queue
+    [ -e "$p/iostats" ] && set_read "$p/iostats" 0 "queue/iostats $d"
+    [ -e "$p/nr_requests" ] && set_read "$p/nr_requests" 32 "queue/nr_requests $d"
+done
+
 # --- 6. Срез состояния (для сравнения "до/после") ---
+log "срез: sched_wakeup_granularity_ns=$(cat /proc/sys/kernel/sched_wakeup_granularity_ns 2>/dev/null)"
 log "срез: loadavg=$(cat /proc/loadavg | cut -d' ' -f1-3)"
 log "срез: PSI cpu=$(cat /proc/pressure/cpu 2>/dev/null | head -1)"
 log "срез: PSI io=$(cat /proc/pressure/io 2>/dev/null | head -1)"
 log "срез: PSI mem=$(cat /proc/pressure/memory 2>/dev/null | head -1)"
 log "срез: cached-процессов=$(dumpsys activity processes 2>/dev/null | grep -c cached)"
-log "срез: zram: исходно=$(cut -d' ' -f1 /sys/block/zram0/mm_stat 2>/dev/null) КБ, сжато=$(cut -d' ' -f2 /sys/block/zram0/mm_stat 2>/dev/null) КБ, в RAM=$(cut -d' ' -f3 /sys/block/zram0/mm_stat 2>/dev/null) КБ"
+log "срез: zram: исходно=$(($(cut -d' ' -f1 /sys/block/zram0/mm_stat 2>/dev/null || echo 0)/1048576)) МБ, сжато=$(($(cut -d' ' -f2 /sys/block/zram0/mm_stat 2>/dev/null || echo 0)/1048576)) МБ, в RAM=$(($(cut -d' ' -f3 /sys/block/zram0/mm_stat 2>/dev/null || echo 0)/1048576)) МБ"
 log "срез: свободно RAM=$(grep MemAvailable /proc/meminfo | awk '{print $2}') КБ"
 
 log "late_start: готово"
