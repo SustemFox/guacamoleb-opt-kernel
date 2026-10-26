@@ -14,7 +14,8 @@ Version: 1.0
        cake_tcf_block            -> без extack            (1 место)
   3. Регистрирует cake в net/sched/Kconfig и net/sched/Makefile.
   4. Конфиг: TCP_CONG_ADVANCED=y, TCP_CONG_BBR=y, TCP_CONG_CUBIC=y,
-     NET_SCH_CAKE=m. Дефолт остаётся cubic, cake сам не грузится.
+     NET_SCH_CAKE=m, NET_SCH_NETEM=m. Дефолт остаётся cubic,
+     модули сами не грузятся.
 
 Usage:
     install_bbr_cake.py <kernel_dir> <config_path>
@@ -24,7 +25,7 @@ import re
 import shutil
 import sys
 
-VERSION = "1.0"
+VERSION = "1.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 KERNEL_FILES = os.path.join(os.path.dirname(HERE), "kernel-files")
 
@@ -237,6 +238,9 @@ def patch_config(cfg_path):
                 "YEAH", "ILLINOIS"):
         lines = setopt("TCP_CONG_" + opt, "n")
     lines = setopt("NET_SCH_CAKE", "m")
+    # netem нужен для честного A/B: без искусственных потерь BBR нечего
+    # лечить, и разница между алгоритмами тонет в шуме канала.
+    lines = setopt("NET_SCH_NETEM", "m")
     write(cfg_path, "\n".join(lines) + "\n")
     return lines
 
@@ -269,7 +273,7 @@ def main():
 
     lines = patch_config(cfg)
     for key in ("TCP_CONG_ADVANCED", "TCP_CONG_BBR", "TCP_CONG_CUBIC",
-                "DEFAULT_TCP_CONG", "NET_SCH_CAKE"):
+                "DEFAULT_TCP_CONG", "NET_SCH_CAKE", "NET_SCH_NETEM"):
         for l in lines:
             if re.match(r'^(# )?CONFIG_%s(=| is not set)' % key, l):
                 print("  config: %s" % l)
