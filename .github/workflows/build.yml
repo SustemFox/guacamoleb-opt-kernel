@@ -192,6 +192,20 @@ jobs:
             "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" \
             "$GITHUB_WORKSPACE/official_boot.img" --top 30 || true
 
+      - name: Verify net patches landed in the image
+        run: |
+          set -euxo pipefail
+          IMG="$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}"
+          # Имя модульного параметра есть только после правки CUBIC, и оно
+          # лежит в .rodata. Строка не голая, а с префиксом модуля:
+          #   tcp_cubic.hystart_ack_delta_us
+          # поэтому ищем подстрокой, а не по целой строке. Старое имя
+          # hystart_ack_delta - суффикс нового, так что проверять его
+          # отдельно нельзя: совпадёт всегда.
+          strings -n 6 "$IMG" | grep -q 'hystart_ack_delta_us' || {
+            echo "::error::правка CUBIC (hystart в мкс) не попала в образ"; exit 8; }
+          echo "::notice::CUBIC hystart в мкс - в образе"
+
       - name: Verify equivalence with the official kernel
         # Стоковый конфиг + BBR/cake выключены по умолчанию, поэтому
         # функциональная эквивалентность эталону должна сохраняться.
