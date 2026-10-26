@@ -223,6 +223,30 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Collect kernel modules
+        if: always()
+        run: |
+          set -euxo pipefail
+          mkdir -p kmods
+          # CONFIG_MODVERSIONS=y: модуль обязан быть собран из ЭТОГО дерева,
+          # иначе ядро его отвергнет. Проверяем vermagic до выкладывания.
+          find "$KERNEL_DIR/out" -name '*.ko' -exec cp {} kmods/ \;
+          ls -l kmods/
+          test -f kmods/sch_cake.ko || { echo "::error::sch_cake.ko не собрался"; exit 4; }
+          echo "vermagic в модуле:"
+          strings kmods/sch_cake.ko | grep -i 'vermagic' || true
+          echo "vermagic эталонного ядра:"
+          strings "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" | grep -m1 '4\.14\.357' || true
+
+      - name: Upload kernel modules
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kmods-${{ github.ref_name }}
+          path: kmods/*.ko
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Upload config and log
         if: always()
         uses: actions/upload-artifact@v4
