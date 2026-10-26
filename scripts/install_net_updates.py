@@ -32,7 +32,12 @@ tcp_mstamp обновляется в tcp_rcv_established() на каждом в�
 видно, что она уже применена.
 
 Usage:
-    install_net_updates.py <kernel_dir>
+    install_net_updates.py <kernel_dir> [--strict]
+
+--strict: считать ошибкой ситуацию, когда файл уже пропатчен. Дерево ядра
+в CI клонируется чистым, поэтому "уже на месте" там означает, что правки
+пришли ещё откуда-то (например, из patches/*.patch), и порядок применения
+перестал быть предсказуемым. Молча продолжать в таком случае нельзя.
 """
 import os
 import sys
@@ -272,15 +277,19 @@ def patch_cubic(src):
 
 
 def main():
-    if len(sys.argv) < 2:
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    strict = "--strict" in sys.argv[1:]
+    if len(args) < 1:
         sys.exit(__doc__)
-    kdir = sys.argv[1]
+    kdir = args[0]
     if not os.path.isdir(os.path.join(kdir, "net/ipv4")):
         die("не похоже на дерево ядра: %s" % kdir)
 
-    print("install_net_updates %s" % VERSION)
+    print("install_net_updates %s%s"
+          % (VERSION, " (strict)" if strict else ""))
 
     total = 0
+    already = []
     for fname, fn in (("tcp_bbr.c", patch_bbr), ("tcp_cubic.c", patch_cubic)):
         path = os.path.join(kdir, "net/ipv4", fname)
         src, p = fn(read(path))
@@ -289,7 +298,13 @@ def main():
             print("  %s: применено %d правок" % (fname, p.n))
         else:
             print("  %s: уже на месте" % fname)
+            already.append(fname)
         total += p.n
+
+    if strict and already:
+        die("в strict-режиме файлы уже были пропатчены: %s. "
+            "На чистом дереве это значит, что правки пришли из другого "
+            "источника - проверьте patches/*.patch." % ", ".join(already))
 
     print("готово, всего новых правок: %d" % total)
 

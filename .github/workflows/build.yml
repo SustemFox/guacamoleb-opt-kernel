@@ -134,8 +134,10 @@ jobs:
             "$KERNEL_DIR" out/.config
           # Правки из более новых ядер: READ_ONCE/WRITE_ONCE для pacing rate
           # в BBR, выбор фазы по cycle_idx вместо gain, Hystart в мкс в CUBIC.
+          # --strict: дерево здесь чистое, поэтому "уже на месте" означает,
+          # что правки пришли ещё откуда-то и порядок больше не предсказуем.
           python3 "$GITHUB_WORKSPACE/scripts/install_net_updates.py" \
-            "$KERNEL_DIR"
+            "$KERNEL_DIR" --strict
           cp "$GITHUB_WORKSPACE/scripts/kmake.sh" .
           bash ./kmake.sh olddefconfig > /tmp/olddefconfig.log 2>&1 || {
             tail -80 /tmp/olddefconfig.log | while IFS= read -r l; do echo "::error::olddefconfig: $l"; done
@@ -234,7 +236,10 @@ jobs:
           mkdir -p kmods
           # CONFIG_MODVERSIONS=y: модуль обязан быть собран из ЭТОГО дерева,
           # иначе ядро его отвергнет. Проверяем vermagic до выкладывания.
-          find "$KERNEL_DIR/out" -name '*.ko' -exec cp {} kmods/ \;
+          # .thinlto-cache создаётся root'ом и не читается: find без -prune
+          # валится с "Permission denied" и роняет шаг, хотя модули целы.
+          find "$KERNEL_DIR/out" -path "$KERNEL_DIR/out/.thinlto-cache" -prune \
+            -o -name '*.ko' -exec cp {} kmods/ \;
           ls -l kmods/
           test -f kmods/sch_cake.ko || { echo "::error::sch_cake.ko не собрался"; exit 4; }
           echo "vermagic в модуле:"
