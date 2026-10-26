@@ -1,8 +1,8 @@
-name: guacamoleb kernel bbr-cake
+name: guacamoleb kernel bbr-cake-v2
 
 on:
   push:
-    branches: [bbr-cake]
+    branches: [bbr-cake-v2]
   workflow_dispatch:
 
 concurrency:
@@ -132,6 +132,10 @@ jobs:
           # сам. Загрузка от них не зависит.
           python3 "$GITHUB_WORKSPACE/scripts/install_bbr_cake.py" \
             "$KERNEL_DIR" out/.config
+          # Правки из более новых ядер: READ_ONCE/WRITE_ONCE для pacing rate
+          # в BBR, выбор фазы по cycle_idx вместо gain, Hystart в мкс в CUBIC.
+          python3 "$GITHUB_WORKSPACE/scripts/install_net_updates.py" \
+            "$KERNEL_DIR"
           cp "$GITHUB_WORKSPACE/scripts/kmake.sh" .
           bash ./kmake.sh olddefconfig > /tmp/olddefconfig.log 2>&1 || {
             tail -80 /tmp/olddefconfig.log | while IFS= read -r l; do echo "::error::olddefconfig: $l"; done
