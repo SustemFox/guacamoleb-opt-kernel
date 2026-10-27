@@ -1,8 +1,8 @@
-name: guacamoleb kernel bbr-cake-v2
+name: guacamoleb kernel susfs-v155
 
 on:
   push:
-    branches: [bbr-cake-v2]
+    branches: [susfs-v155]
   workflow_dispatch:
 
 concurrency:
@@ -138,6 +138,9 @@ jobs:
           # что правки пришли ещё откуда-то и порядок больше не предсказуем.
           python3 "$GITHUB_WORKSPACE/scripts/install_net_updates.py" \
             "$KERNEL_DIR" --strict
+          # KernelSU + SUSFS. SUS_MAP и OPEN_REDIRECT держим выключенными:
+          # в susfs_ksu_compat.h это заглушки do {} while(0).
+          python3 "$GITHUB_WORKSPACE/scripts/install_susfs.py" out/.config
           cp "$GITHUB_WORKSPACE/scripts/kmake.sh" .
           bash ./kmake.sh olddefconfig > /tmp/olddefconfig.log 2>&1 || {
             tail -80 /tmp/olddefconfig.log | while IFS= read -r l; do echo "::error::olddefconfig: $l"; done
