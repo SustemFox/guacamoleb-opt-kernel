@@ -13,7 +13,7 @@ env:
   ARCH: arm64
   KERNEL_IMAGE: Image
   KERNEL_REPO: https://github.com/LineageOS/android_kernel_oneplus_sm8150
-  KERNEL_COMMIT: 0521dc291cf10bd754fb5ff385e74875c406d577
+  KERNEL_COMMIT: 9f007fac27dce21d29d8230753b71d5634b8a00e
   PREBUILTS_REPO: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86
   PREBUILTS_BRANCH: mirror-goog-main-llvm-toolchain-source
   GCC64_REPO: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9
@@ -22,12 +22,13 @@ env:
   GCC32_BRANCH: lineage-19.1
   AVBTOOL_URL: https://android.googlesource.com/platform/external/avb/+/refs/heads/main/avbtool.py?format=TEXT
   KERNEL_DIR: /lineage/lineage-24.0/kernel/oneplus/sm8150
-  # Баннер официального ядра: "#0 SMP PREEMPT Sun Oct 18 01:17:55 UTC 2026"
-  # и "root@32db8f4874f2". Эти четыре переменные воспроизводят его байт в байт.
+  # Баннер официального ядра от 2026-11-01 (сборка LineageOS, коммит 9f007fac2):
+  # "#0 SMP PREEMPT Sun Nov 1 02:33:07 UTC 2026" и "root@0ef44fd3c1b1".
+  # Эти четыре переменные воспроизводят его байт в байт.
   KBUILD_BUILD_USER: root
-  KBUILD_BUILD_HOST: 32db8f4874f2
+  KBUILD_BUILD_HOST: 0ef44fd3c1b1
   KBUILD_BUILD_VERSION: "0"
-  KBUILD_BUILD_TIMESTAMP: "2026-10-18 01:17:55 UTC"
+  KBUILD_BUILD_TIMESTAMP: "Sun Nov 1 02:33:07 UTC 2026"
 
 jobs:
   build:
