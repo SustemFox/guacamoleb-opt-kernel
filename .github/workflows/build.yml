@@ -210,14 +210,17 @@ jobs:
           echo "::notice::CUBIC hystart в мкс - в образе"
 
       - name: Verify equivalence with the official kernel
-        # Стоковый конфиг + BBR/cake выключены по умолчанию, поэтому
-        # функциональная эквивалентность эталону должна сохраняться.
+        # Ветка susfs-v155 по определению не эквивалентна стоку: KernelSU и
+        # SUSFS добавляют свои строки (u:r:ksu:s0, /data/adb/ksud и т.п.).
+        # Поэтому здесь проверяются только совместимые с загрузкой
+        # инварианты (clang build id, release, размер образа), а новые
+        # строки считаются ожидаемыми. --require-equivalent оставлен для
+        # веток без функциональных правок.
         run: |
           set -euxo pipefail
           python3 scripts/verify_reference.py \
             "$KERNEL_DIR/out/arch/arm64/boot/${KERNEL_IMAGE}" \
-            "$GITHUB_WORKSPACE/official_boot.img" \
-            --require-equivalent
+            "$GITHUB_WORKSPACE/official_boot.img"
 
       - name: Repack boot
         if: always()
