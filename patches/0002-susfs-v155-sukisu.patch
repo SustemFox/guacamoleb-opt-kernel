@@ -889,10 +889,10 @@ index 000000000..d159169d1
 +Public License instead of this License.
 diff --git a/KernelSU/kernel/Makefile b/KernelSU/kernel/Makefile
 new file mode 100644
-index 000000000..e4d274d8b
+index 000000000..e0770bfbe
 --- /dev/null
 +++ b/KernelSU/kernel/Makefile
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,165 @@
 +obj-$(CONFIG_KSU) := ksu.o
 +
 +ccflags-y += -I$(srctree)/security/selinux -I$(srctree)/security/selinux/include
@@ -939,6 +939,14 @@ index 000000000..e4d274d8b
 +GITHUB_COMMITS   := $(shell $(CURL_BIN) -sI "$(GITHUB_API_BASE)/commits?sha=$(REPO_BRANCH)&per_page=1" 2>/dev/null | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p')
 +LOCAL_COUNT     := $(if $(GITHUB_COMMITS),$(GITHUB_COMMITS),$(git_commit_count))
 +KSU_VERSION     := $(if $(LOCAL_COUNT),$(shell expr $(VERSION_BASE) + $(LOCAL_COUNT) - $(VERSION_OFFSET)),13000)
++
++# Номер версии в ядре должен совпадать с versionCode установленного
++# менеджера. Иначе менеджер считает ядро несовместимым и отказывает в root.
++# Автоопределение по числу коммитов даёт значение новее последнего релиза,
++# поэтому номер задаётся снаружи через KSU_VERSION_OVERRIDE.
++ifdef KSU_VERSION_OVERRIDE
++KSU_VERSION := $(KSU_VERSION_OVERRIDE)
++endif
 +VERSION_TAG     := $(or $(KSU_GITHUB_VER),$(git_latest_tag),4.1.2)
 +KSU_VERSION_FULL := $(if $(call git_short_sha),v$(VERSION_TAG)-$(call git_short_sha)@$(call git_branch),v$(VERSION_TAG)-$(REPO_NAME)-unknown@unknown)
 +$(info -- $(REPO_NAME) version: $(KSU_VERSION) [$(KSU_VERSION_FULL)])

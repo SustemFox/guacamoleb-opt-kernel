@@ -14,6 +14,9 @@ env:
   KERNEL_IMAGE: Image
   KERNEL_REPO: https://github.com/LineageOS/android_kernel_oneplus_sm8150
   KERNEL_COMMIT: 9f007fac27dce21d29d8230753b71d5634b8a00e
+  # versionCode менеджера SukiSU v4.3.0-r2. Должен совпадать с тем, что
+  # зашит в ядро, иначе менеджер считает ядро несовместимым и не даёт root.
+  KSU_VERSION_OVERRIDE: 41150
   PREBUILTS_REPO: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86
   PREBUILTS_BRANCH: mirror-goog-main-llvm-toolchain-source
   GCC64_REPO: https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9
@@ -179,13 +182,24 @@ jobs:
           cp "$GITHUB_WORKSPACE/scripts/kmake.sh" .
           # Сборка от root: cpio -p сохраняет владельца файлов только под
           # root, иначе в kheaders.tar.xz попадает uid 1001 (runner).
-          sudo -E env "PATH=$PATH" bash -c 'umask 022; exec bash ./kmake.sh -j"$(nproc --all)" "$KERNEL_IMAGE" modules' > "$GITHUB_WORKSPACE/build.log" 2>&1
+          sudo -E env "PATH=$PATH" "KSU_VERSION_OVERRIDE=$KSU_VERSION_OVERRIDE" bash -c 'umask 022; exec bash ./kmake.sh -j"$(nproc --all)" "$KERNEL_IMAGE" modules' > "$GITHUB_WORKSPACE/build.log" 2>&1
           rc=$?
           tail -40 "$GITHUB_WORKSPACE/build.log"
           if [ "$rc" -ne 0 ]; then
             grep -E 'error:|Error [0-9]|undefined (reference|symbol)' "$GITHUB_WORKSPACE/build.log" | head -30 | while IFS= read -r line; do echo "::error::build: ${line}"; done
             exit "$rc"
           fi
+
+      - name: Verify KernelSU version matches the manager
+        # Менеджер отказывается работать, если номер версии в ядре больше
+        # его собственного versionCode. Проверяем, что override применился.
+        run: |
+          set -euxo pipefail
+          got=$(grep -o 'SukiSU-Ultra version: [0-9]*' "$GITHUB_WORKSPACE/build.log" | head -1 | awk '{print $3}')
+          echo "kernel KSU_VERSION: $got, expected: $KSU_VERSION_OVERRIDE"
+          test "$got" = "$KSU_VERSION_OVERRIDE" || {
+            echo "::error::KSU_VERSION в ядре ($got) не совпадает с менеджером ($KSU_VERSION_OVERRIDE)"
+            exit 9; }
 
       - name: Diff report vs official
         if: always()
