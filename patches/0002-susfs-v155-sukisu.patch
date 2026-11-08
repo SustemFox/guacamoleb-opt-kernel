@@ -2911,10 +2911,10 @@ index 000000000..565f59113
 +#endif
 diff --git a/KernelSU/kernel/hook/lsm_hook.c b/KernelSU/kernel/hook/lsm_hook.c
 new file mode 100644
-index 000000000..6e59c133b
+index 000000000..49f9995c8
 --- /dev/null
 +++ b/KernelSU/kernel/hook/lsm_hook.c
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,174 @@
 +#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) || defined(CONFIG_IS_HW_HISI) ||                                     \
 +    defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
 +static int ksu_key_permission(key_ref_t key_ref, const struct cred *cred, unsigned perm)
@@ -2936,14 +2936,18 @@ index 000000000..6e59c133b
 +#ifdef CONFIG_KSU_SUSFS
 +extern u32 susfs_zygote_sid;
 +extern void disable_seccomp(void);
-+extern struct work_struct susfs_extra_works;
++extern void susfs_run_try_umount_for_current_mnt_ns(void);
 +
++/* SUSFS v1.5.5 обходит mount namespace ВЫЗЫВАЮЩЕГО процесса:
++ *   mnt_ns = current->nsproxy->mnt_ns;
++ * В kworker'е current->nsproxy == NULL, поэтому вызов через
++ * schedule_work даёт NULL deref и панику ещё на загрузке.
++ * Дёргаем синхронно, в контексте процесса, который делает setresuid. */
 +static inline void ksu_handle_extra_susfs_work(void)
 +{
-+    if (work_pending(&susfs_extra_works))
-+        return;
-+
-+    schedule_work(&susfs_extra_works);
++#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
++    susfs_run_try_umount_for_current_mnt_ns();
++#endif
 +}
 +
 +int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
@@ -3099,10 +3103,10 @@ index 000000000..809834756
 +#endif
 diff --git a/KernelSU/kernel/hook/susfs_compat.c b/KernelSU/kernel/hook/susfs_compat.c
 new file mode 100644
-index 000000000..86a6b5140
+index 000000000..4f6b1dec3
 --- /dev/null
 +++ b/KernelSU/kernel/hook/susfs_compat.c
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,70 @@
 +/*
 + * KernelSU-side glue for the SUSFS v1.5.5 kernel patches.
 + *
@@ -3110,7 +3114,6 @@ index 000000000..86a6b5140
 + * expects three helpers that v1.5.5 does not provide:
 + *   - ksu_try_umount()          (lived in the old monolithic core_hook.c)
 + *   - susfs_try_umount_all()    (called from fs/namespace.c)
-+ *   - susfs_extra_works         (struct work_struct, scheduled from hook/lsm_hook.c)
 + * They are implemented here instead of rewriting the KSU hooks.
 + */
 +#ifdef CONFIG_KSU_SUSFS
@@ -3124,11 +3127,6 @@ index 000000000..86a6b5140
 +
 +extern int path_umount(struct path *path, int flags);
 +extern void susfs_try_umount(uid_t uid);
-+#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
-+extern void susfs_run_try_umount_for_current_mnt_ns(void);
-+#endif
-+
-+struct work_struct susfs_extra_works;
 +
 +/*
 + * check_mnt/uid are kept for API compatibility with the v2.x callers.
@@ -3176,20 +3174,6 @@ index 000000000..86a6b5140
 +	 * detaching it is safe and matches upstream behaviour */
 +	ksu_try_umount("/data/adb/modules", false, MNT_DETACH, uid);
 +	ksu_try_umount("/debug_ramdisk", true, MNT_DETACH, uid);
-+}
-+
-+#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
-+static void susfs_extra_works_func(struct work_struct *work)
-+{
-+	susfs_run_try_umount_for_current_mnt_ns();
-+}
-+#endif
-+
-+void __init susfs_compat_work_init(void)
-+{
-+#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
-+	INIT_WORK(&susfs_extra_works, susfs_extra_works_func);
-+#endif
 +}
 +
 +#endif /* CONFIG_KSU_SUSFS */
@@ -6200,10 +6184,10 @@ index 000000000..59680d2a5
 \ No newline at end of file
 diff --git a/KernelSU/kernel/ksu.c b/KernelSU/kernel/ksu.c
 new file mode 100644
-index 000000000..7ba5acd9b
+index 000000000..06be50f7f
 --- /dev/null
 +++ b/KernelSU/kernel/ksu.c
-@@ -0,0 +1,172 @@
+@@ -0,0 +1,171 @@
 +#include "kernel_includes.h"
 +
 +// uapi
@@ -6338,7 +6322,6 @@ index 000000000..7ba5acd9b
 +
 +#ifdef CONFIG_KSU_SUSFS
 +    susfs_init();
-+    susfs_compat_work_init();
 +#endif
 +
 +    ksu_feature_init();
@@ -13821,7 +13804,7 @@ index d8cd2ab58..43b3e70d0 100644
  	return filp;
  }
 diff --git a/fs/namespace.c b/fs/namespace.c
-index d772fe46e..3e98ff370 100644
+index d772fe46e..e6337ad16 100644
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
 @@ -27,10 +27,39 @@
@@ -14200,7 +14183,7 @@ index d772fe46e..3e98ff370 100644
  	namespace_unlock();
  
  	if (rootmnt)
-@@ -3635,3 +3891,37 @@ const struct proc_ns_operations mntns_operations = {
+@@ -3635,3 +3891,39 @@ const struct proc_ns_operations mntns_operations = {
  	.install	= mntns_install,
  	.owner		= mntns_owner,
  };
@@ -14211,6 +14194,8 @@ index d772fe46e..3e98ff370 100644
 +	struct mount *mnt;
 +	struct mnt_namespace *mnt_ns;
 +
++	if (unlikely(!current->nsproxy || !current->nsproxy->mnt_ns))
++		return;
 +	mnt_ns = current->nsproxy->mnt_ns;
 +	// Lock the namespace
 +	namespace_lock();
