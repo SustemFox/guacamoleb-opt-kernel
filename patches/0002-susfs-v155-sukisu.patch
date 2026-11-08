@@ -13523,24 +13523,28 @@ index 0708565ad..186252b46 100644
  		if (dentry->d_parent != parent)
  			goto next;
 diff --git a/fs/exec.c b/fs/exec.c
-index 3772c60aa..40715b34b 100644
+index 3772c60aa..aaa82acd1 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
-@@ -1727,6 +1727,14 @@ static int __do_execve_file(int fd, struct filename *filename,
- 	if (IS_ERR(filename))
- 		return PTR_ERR(filename);
- 
+@@ -1885,6 +1885,18 @@ static int do_execveat_common(int fd, struct filename *filename,
+ 			      struct user_arg_ptr envp,
+ 			      int flags)
+ {
 +#ifdef CONFIG_KSU
 +	{
++		/* Хук ставится здесь, а не в __do_execve_file: туда приходит
++		 * do_execve_file() из call_usermodehelper с filename == NULL и
++		 * argv в адресном пространстве ядра. Обработчики KSU такой
++		 * вызов не переживут (memcmp(filename->name) и
++		 * get_user_arg_ptr на kernel-указателе). */
 +		extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,
 +					       void *argv, void *envp, int *flags);
 +		ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
 +	}
 +#endif
-+
- 	/*
- 	 * We move the actual failure in case of RLIMIT_NPROC excess from
- 	 * set*uid() to execve() because too many poorly written programs
+ 	return __do_execve_file(fd, filename, argv, envp, flags, NULL);
+ }
+ 
 diff --git a/fs/namei.c b/fs/namei.c
 index d8cd2ab58..43b3e70d0 100644
 --- a/fs/namei.c
