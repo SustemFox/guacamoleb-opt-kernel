@@ -3089,6 +3089,102 @@ index 000000000..809834756
 +void __init ksu_lsm_hook_init(void);
 +
 +#endif
+diff --git a/KernelSU/kernel/hook/susfs_compat.c b/KernelSU/kernel/hook/susfs_compat.c
+new file mode 100644
+index 000000000..86a6b5140
+--- /dev/null
++++ b/KernelSU/kernel/hook/susfs_compat.c
+@@ -0,0 +1,90 @@
++/*
++ * KernelSU-side glue for the SUSFS v1.5.5 kernel patches.
++ *
++ * SukiSU-Ultra 4.1.3 was written against the SUSFS v2.x API surface and
++ * expects three helpers that v1.5.5 does not provide:
++ *   - ksu_try_umount()          (lived in the old monolithic core_hook.c)
++ *   - susfs_try_umount_all()    (called from fs/namespace.c)
++ *   - susfs_extra_works         (struct work_struct, scheduled from hook/lsm_hook.c)
++ * They are implemented here instead of rewriting the KSU hooks.
++ */
++#ifdef CONFIG_KSU_SUSFS
++
++#include <linux/errno.h>
++#include <linux/fs.h>
++#include <linux/mount.h>
++#include <linux/namei.h>
++#include <linux/sched.h>
++#include <linux/workqueue.h>
++
++extern int path_umount(struct path *path, int flags);
++extern void susfs_try_umount(uid_t uid);
++#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
++extern void susfs_run_try_umount_for_current_mnt_ns(void);
++#endif
++
++struct work_struct susfs_extra_works;
++
++/*
++ * check_mnt/uid are kept for API compatibility with the v2.x callers.
++ * v1.5.5 does not expose should_umount() to us, and the callers already
++ * filtered the uids, so the mountpoint root check below is all we need.
++ */
++void ksu_try_umount(const char *mnt, bool check_mnt, int flags, uid_t uid)
++{
++	struct path path;
++	int err;
++
++	(void)check_mnt;
++	(void)uid;
++
++	if (!mnt)
++		return;
++
++	err = kern_path(mnt, 0, &path);
++	if (err)
++		return;
++
++	if (path.dentry != path.mnt->mnt_root) {
++		/* not a mountpoint any more, somebody else already umounted it */
++		path_put(&path);
++		return;
++	}
++
++	err = path_umount(&path, flags);
++	if (err)
++		pr_info("susfs: umount %s failed: %d\n", mnt, err);
++
++	path_put(&path);
++}
++
++void susfs_try_umount_all(uid_t uid)
++{
++	susfs_try_umount(uid);
++
++	ksu_try_umount("/system", true, 0, uid);
++	ksu_try_umount("/system_ext", true, 0, uid);
++	ksu_try_umount("/vendor", true, 0, uid);
++	ksu_try_umount("/product", true, 0, uid);
++	ksu_try_umount("/odm", true, 0, uid);
++	/* loop device behind magic mount: we cannot tell whether it is ours,
++	 * detaching it is safe and matches upstream behaviour */
++	ksu_try_umount("/data/adb/modules", false, MNT_DETACH, uid);
++	ksu_try_umount("/debug_ramdisk", true, MNT_DETACH, uid);
++}
++
++#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
++static void susfs_extra_works_func(struct work_struct *work)
++{
++	susfs_run_try_umount_for_current_mnt_ns();
++}
++#endif
++
++void __init susfs_compat_work_init(void)
++{
++#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
++	INIT_WORK(&susfs_extra_works, susfs_extra_works_func);
++#endif
++}
++
++#endif /* CONFIG_KSU_SUSFS */
 diff --git a/KernelSU/kernel/include/klog.h b/KernelSU/kernel/include/klog.h
 new file mode 100644
 index 000000000..a934027fb
@@ -6096,10 +6192,10 @@ index 000000000..59680d2a5
 \ No newline at end of file
 diff --git a/KernelSU/kernel/ksu.c b/KernelSU/kernel/ksu.c
 new file mode 100644
-index 000000000..dff4befa2
+index 000000000..7ba5acd9b
 --- /dev/null
 +++ b/KernelSU/kernel/ksu.c
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,172 @@
 +#include "kernel_includes.h"
 +
 +// uapi
@@ -6193,6 +6289,10 @@ index 000000000..dff4befa2
 +
 +#include "hook/lsm_hook.c"
 +
++#ifdef CONFIG_KSU_SUSFS
++#include "hook/susfs_compat.c"
++#endif
++
 +#include "selinux/selinux.c"
 +#include "selinux/sepolicy.c"
 +#include "selinux/rules.c"
@@ -6230,6 +6330,7 @@ index 000000000..dff4befa2
 +
 +#ifdef CONFIG_KSU_SUSFS
 +    susfs_init();
++    susfs_compat_work_init();
 +#endif
 +
 +    ksu_feature_init();
