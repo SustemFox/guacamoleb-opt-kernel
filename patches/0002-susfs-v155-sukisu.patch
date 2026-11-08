@@ -14315,21 +14315,21 @@ index d309171b6..ccb46e7bc 100644
  			   inode_mark->wd, inode->i_ino, inode->i_sb->s_dev,
  			   inotify_mark_user_mask(mark));
 diff --git a/fs/open.c b/fs/open.c
-index e0857ce70..1b6adf2cd 100644
+index e0857ce70..e79328df8 100644
 --- a/fs/open.c
 +++ b/fs/open.c
-@@ -361,6 +361,11 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
-  */
- SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
- {
+@@ -368,6 +368,11 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+ 	struct vfsmount *mnt;
+ 	int res;
+ 	unsigned int lookup_flags = LOOKUP_FOLLOW;
 +#ifdef CONFIG_KSU
 +	extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user,
 +					int *mode, int *__unused_flags);
 +	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
 +#endif
- 	const struct cred *old_cred;
- 	struct cred *override_cred;
- 	struct path path;
+ 
+ 	if (mode & ~S_IRWXO)	/* where's F_OK, X_OK, W_OK, R_OK? */
+ 		return -EINVAL;
 diff --git a/fs/overlayfs/inode.c b/fs/overlayfs/inode.c
 index 193422780..5765b8d82 100644
 --- a/fs/overlayfs/inode.c
@@ -16315,20 +16315,20 @@ index 9a1cafc8d..04c417457 100644
  }
  
 diff --git a/kernel/sys.c b/kernel/sys.c
-index f9c2a076c..f874feed5 100644
+index f9c2a076c..9448c0c8c 100644
 --- a/kernel/sys.c
 +++ b/kernel/sys.c
-@@ -597,6 +597,10 @@ SYSCALL_DEFINE1(setuid, uid_t, uid)
-  */
- SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)
- {
+@@ -602,6 +602,10 @@ SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)
+ 	struct cred *new;
+ 	int retval;
+ 	kuid_t kruid, keuid, ksuid;
 +#ifdef CONFIG_KSU
 +	extern int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid);
 +	ksu_handle_setresuid(ruid, euid, suid);
 +#endif
- 	struct user_namespace *ns = current_user_ns();
- 	const struct cred *old;
- 	struct cred *new;
+ 
+ 	kruid = make_kuid(ns, ruid);
+ 	keuid = make_kuid(ns, euid);
 @@ -1182,12 +1186,18 @@ static int override_release(char __user *release, size_t len)
  	return ret;
  }
