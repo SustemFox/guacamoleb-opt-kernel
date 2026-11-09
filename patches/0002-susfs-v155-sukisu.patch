@@ -8389,10 +8389,10 @@ index 000000000..efa06d7cf
 +#endif // __KSU_H_FEATURE
 diff --git a/KernelSU/kernel/runtime/ksud.c b/KernelSU/kernel/runtime/ksud.c
 new file mode 100644
-index 000000000..fa998fd2e
+index 000000000..e96f0d59d
 --- /dev/null
 +++ b/KernelSU/kernel/runtime/ksud.c
-@@ -0,0 +1,733 @@
+@@ -0,0 +1,734 @@
 +bool ksu_module_mounted __read_mostly = false;
 +bool ksu_boot_completed __read_mostly = false;
 +
@@ -8862,25 +8862,26 @@ index 000000000..fa998fd2e
 +        return;
 +    }
 +
-+    // we only process the first read
-+    static bool rc_hooked = false;
-+    if (rc_hooked) {
-+        // we don't need these hooks, unregister it!
++    /*
++     * init на Android 12+ открывает init.rc несколько раз. Раньше здесь
++     * стоял static bool rc_hooked: прокси ставился только на первый файл,
++     * а vfs_read-хук сразу выключался. Из-за этого блок с запуском ksud
++     * не попадал в конфиг вовсе - в логе есть "read init.rc", но нет ни
++     * одного "read_proxy: append", и ksud не стартовал.
++     * Теперь хукаем каждый файл, пока блок не будет отдан целиком.
++     */
++    if (ksu_rc_pos >= ksu_rc_len) {
 +#ifndef CONFIG_KSU_SUSFS
 +        stop_vfs_read_hook();
 +#endif
 +        return;
 +    }
-+    rc_hooked = true;
-+
-+#ifdef CONFIG_KSU_SUSFS
-+    stop_vfs_read_hook();
-+#endif
 +
 +    // now we can sure that the init process is reading
 +    // `/system/etc/init/init.rc`
 +
-+    pr_info("read init.rc, comm: %s, rc_count: %zu\n", current->comm, ksu_rc_len);
++    pr_info("read init.rc, comm: %s, rc_len: %zu, pos: %zd\n",
++            current->comm, ksu_rc_len, ksu_rc_pos);
 +
 +    // Now we need to proxy the read and modify the result!
 +    // But, we can not modify the file_operations directly, because it's in read-only memory.

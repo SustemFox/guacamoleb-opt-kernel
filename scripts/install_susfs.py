@@ -19,7 +19,7 @@ import os
 import re
 import sys
 
-VERSION = "1.0"
+VERSION = "1.1"
 
 OPTS = {
     "KSU": "y",
@@ -42,6 +42,16 @@ OPTS = {
     # иначе Kconfig ставит их в y по default.
     "KSU_SUSFS_SUS_MAP": "n",
     "KSU_SUSFS_OPEN_REDIRECT": "n",
+    # pstore: без него паника ядра нигде не оседает - в этом дереве нет
+    # ни ramoops, ни /proc/last_kmsg, и разобраться, почему сборка не
+    # загрузилась, невозможно. Пишем console в RAM, чтобы после
+    # неудачной загрузки прочитать /sys/fs/pstore/console-ramoops.
+    "PSTORE": "y",
+    "PSTORE_RAM": "y",
+    "PSTORE_CONSOLE": "y",
+    "PSTORE_PMSG": "y",
+    "PSTORE_FTRACE": "n",
+    "PANIC_TIMEOUT": "5",
 }
 
 
