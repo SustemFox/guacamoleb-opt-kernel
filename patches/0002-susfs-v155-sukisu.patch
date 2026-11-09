@@ -9173,10 +9173,10 @@ index 000000000..834770c74
 +#endif
 diff --git a/KernelSU/kernel/selinux/rules.c b/KernelSU/kernel/selinux/rules.c
 new file mode 100644
-index 000000000..f8a33faad
+index 000000000..e24e7928d
 --- /dev/null
 +++ b/KernelSU/kernel/selinux/rules.c
-@@ -0,0 +1,778 @@
+@@ -0,0 +1,788 @@
 +#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 +#define SELINUX_POLICY_INSTEAD_SELINUX_SS
 +struct selinux_policy *backup_sepolicy;
@@ -9433,6 +9433,16 @@ index 000000000..f8a33faad
 +out_flush:
 +    smp_mb();
 +    reset_avc_cache();
++#ifdef CONFIG_KSU_SUSFS
++    /*
++     * Здесь тоже нужен вызов: на 4.14 с policy_rwlock используется именно
++     * эта ветка (в логе "apply_kernelsu_rules: type: policy_rwlock"), а не
++     * та, что выше. Без него susfs_zygote_sid/ksu_sid остаются нулями,
++     * ksu_handle_setresuid() выходит на первой проверке, disable_seccomp()
++     * не срабатывает - и libksud.so убивает SIGSYS на sched_setattr.
++     */
++    susfs_set_batch_sid();
++#endif
 +#endif
 +}
 +
