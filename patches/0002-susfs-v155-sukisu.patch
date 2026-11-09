@@ -14605,6 +14605,36 @@ index b859aaeec..d9ca462a8 100644
  	/* device */
  	if (sb->s_op->show_devname) {
  		seq_puts(m, "device ");
+diff --git a/fs/read_write.c b/fs/read_write.c
+index 0da6e4f19..fc9826ec0 100644
+--- a/fs/read_write.c
++++ b/fs/read_write.c
+@@ -429,10 +429,25 @@ ssize_t kernel_read(struct file *file, void *buf, size_t count, loff_t *pos)
+ }
+ EXPORT_SYMBOL(kernel_read);
+ 
++#ifdef CONFIG_KSU
++/*
++ * Ручной хук KernelSU: даёт ядру подменить содержимое init.rc, чтобы init
++ * запустил /data/adb/ksud на post-fs-data, services и boot-completed.
++ * Без него ksud не стартует: некому показать запрос на root и смонтировать
++ * модули (в том числе модуль с wifi).
++ */
++extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
++			       size_t *count_ptr, loff_t **pos);
++#endif
++
+ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+ {
+ 	ssize_t ret;
+ 
++#ifdef CONFIG_KSU
++	ksu_handle_vfs_read(&file, &buf, &count, &pos);
++#endif
++
+ 	if (!(file->f_mode & FMODE_READ))
+ 		return -EBADF;
+ 	if (!(file->f_mode & FMODE_CAN_READ))
 diff --git a/fs/readdir.c b/fs/readdir.c
 index e6f4c7b88..a2bf0ec64 100644
 --- a/fs/readdir.c
